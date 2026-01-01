@@ -202,6 +202,12 @@ def handle_screenshot_request(
 
                 if recv_cmd == CMD_IMG_FIN:
                     print(f"✅ [IMG_FIN] Transfer complete! Client acknowledged.")
+
+                    # Send ACK to confirm we received IMG_FIN
+                    fin_ack_frame = ProtocolFrame.pack_ack(recv_seq)
+                    sock.sendto(fin_ack_frame, addr)
+                    print(f"   📤 Sent ACK for IMG_FIN (seq={recv_seq})")
+
                     print(f"{'='*60}\n")
                     break
 

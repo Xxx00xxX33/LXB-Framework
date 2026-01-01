@@ -361,11 +361,8 @@ class Transport:
         # Step 3: Receive all chunks with selective repeat
         chunks = self._receive_chunks_with_retries(num_chunks)
 
-        # Step 4: Send IMG_FIN to acknowledge completion
-        seq_fin = self._next_seq()
-        fin_frame = ProtocolFrame.pack(seq_fin, CMD_IMG_FIN, b'')
-        self._send_frame(fin_frame)
-        logger.info(f"Sent IMG_FIN (seq={seq_fin})")
+        # Step 4: Send IMG_FIN to acknowledge completion and wait for ACK
+        self._send_img_fin_with_ack()
 
         # Step 5: Assemble and return complete image
         complete_image = b''.join(chunks)
@@ -577,4 +574,74 @@ class Transport:
 
         logger.info(
             f"Sent IMG_MISSING (seq={seq_missing}): {len(missing_indices)} chunks"
+        )
+
+    def _send_img_fin_with_ack(
+        self,
+        timeout: float = 2.0,
+        max_retries: int = 3
+    ) -> None:
+        """
+        Send IMG_FIN and wait for ACK with retry logic.
+
+        This ensures the server knows the transfer is complete even if the
+        FIN packet is lost. Without this ACK, the server would wait indefinitely
+        for IMG_MISSING requests.
+
+        Args:
+            timeout: Timeout for waiting for ACK (default: 2.0s)
+            max_retries: Maximum retry attempts (default: 3)
+
+        Raises:
+            LXBTimeoutError: If ACK not received after max retries
+        """
+        retry_count = 0
+
+        while retry_count <= max_retries:
+            # Send IMG_FIN
+            seq_fin = self._next_seq()
+            fin_frame = ProtocolFrame.pack(seq_fin, CMD_IMG_FIN, b'')
+            self._send_frame(fin_frame)
+            logger.info(f"Sent IMG_FIN (seq={seq_fin}, retry={retry_count})")
+
+            # Wait for ACK
+            original_timeout = self._sock.gettimeout() # type: ignore
+            self._sock.settimeout(timeout) # type: ignore
+
+            try:
+                while True:
+                    try:
+                        recv_data, recv_addr = self._recv_frame()
+                        recv_seq, recv_cmd, recv_payload = ProtocolFrame.unpack(recv_data)
+
+                        if recv_cmd == CMD_ACK and recv_seq == seq_fin:
+                            logger.info(
+                                "Received ACK for IMG_FIN - Transfer complete!"
+                            )
+                            return
+
+                        else:
+                            logger.warning(
+                                f"Unexpected response while waiting for FIN_ACK: "
+                                f"cmd=0x{recv_cmd:02X}, seq={recv_seq}"
+                            )
+                            continue
+
+                    except (LXBProtocolError, LXBChecksumError) as e:
+                        logger.warning(f"Invalid frame received: {e}")
+                        continue
+
+            except socket.timeout:
+                logger.warning(
+                    f"Timeout waiting for FIN_ACK "
+                    f"(retry {retry_count}/{max_retries})"
+                )
+                retry_count += 1
+
+            finally:
+                self._sock.settimeout(original_timeout) # type: ignore
+
+        # Max retries exceeded
+        raise LXBTimeoutError(
+            f"Failed to receive FIN_ACK after {max_retries} retries"
         )
