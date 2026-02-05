@@ -83,41 +83,90 @@ def set_config(config: VLMConfig):
 class VLMEngine:
     """OpenAI 兼容 API VLM 引擎"""
 
-    # 提示词 - 只识别核心导航和功能元素
-    _PROMPT_OD = """分析这张手机 App 截图，只识别**页面级别的导航和功能入口**。
+    # 提示词 - 结合 XML 和截图分析导航元素
+    _PROMPT_OD = """分析这张手机 App 截图，**只识别用于页面导航的核心 UI 元素**。
 
-**必须识别**（通常在页面顶部、底部或固定位置）：
-- 顶部导航栏：返回按钮、标题、菜单、搜索框
-- 底部导航栏：首页、消息、购物车、我的等 Tab
-- 顶部 Tab 切换：如"关注"、"推荐"、"热门"等分类标签
-- 搜索框/搜索按钮
-- 悬浮按钮：如发布、客服等
+**必须识别**（这些是页面跳转的锚点）：
+1. 顶部导航栏：返回按钮、标题栏按钮、搜索入口、菜单按钮
+2. 底部导航栏：首页/消息/购物车/我的等 Tab 按钮
+3. 顶部 Tab 切换：如"关注"、"推荐"、"热门"等分类标签
+4. 悬浮按钮：发布按钮、客服按钮、回到顶部等
+5. 侧边栏入口：抽屉菜单按钮
 
-**不要识别**（这些是内容，不是导航）：
-- 商品卡片、商品图片、商品价格
-- 信息流中的任何内容
-- 广告横幅、促销活动卡片
-- 列表中的每一项
-- 任何滚动区域内的内容
+**不要识别**（这些是动态内容，不是导航）：
+- 商品卡片、商品图片、商品价格、商品标题
+- 信息流中的任何内容（帖子、文章、视频缩略图）
+- 广告横幅、促销活动、优惠券
+- 列表中的每一项数据
+- 搜索历史、推荐词、热搜词
+- 用户头像、用户名、评论内容
+- 任何滚动区域内的动态内容
 
-**坐标**：像素坐标 [x1, y1, x2, y2]
+**坐标格式**：像素坐标 [x1, y1, x2, y2]
 
 返回 JSON：
 ```json
 {
   "elements": [
-    {"label": "tab", "bbox": [55, 180, 165, 241], "text": "关注"},
-    {"label": "nav_item", "bbox": [100, 2700, 200, 2772], "text": "首页"}
+    {"label": "nav_button", "bbox": [20, 50, 80, 110], "text": "返回"},
+    {"label": "tab", "bbox": [55, 180, 165, 241], "text": "推荐"},
+    {"label": "bottom_nav", "bbox": [100, 2700, 200, 2772], "text": "首页"}
   ]
 }
 ```
 
-label: tab, nav_item, button, icon, input, search
-只返回 JSON，最多 30 个元素。"""
+label 类型：nav_button, tab, bottom_nav, fab, search, menu, icon
+只返回 JSON，最多 15 个元素。"""
+
+    # 新增：结合 XML 的联合分析 Prompt
+    _PROMPT_JOINT_ANALYSIS = """你是一个 Android UI 分析专家。我会给你一张 App 截图和该页面的 XML 节点列表。
+
+**你的任务**：从 XML 节点中筛选出**导航锚点**（用于页面跳转的重要 UI 元素）。
+
+**导航锚点的特征**：
+1. **位置固定**：通常在屏幕顶部（状态栏下方）或底部（底部导航栏）
+2. **功能稳定**：返回按钮、Tab 切换、底部导航、搜索入口、菜单按钮
+3. **不随内容变化**：无论页面内容如何滚动，这些元素位置不变
+
+**不是导航锚点**：
+- 列表中的每一项（商品、帖子、消息等）
+- 搜索历史、推荐词
+- 动态内容区域的任何元素
+- 广告、促销横幅
+
+**XML 节点列表**：
+{xml_nodes}
+
+**请分析并返回 JSON**：
+```json
+{{
+  "nav_anchors": [
+    {{"node_index": 0, "role": "back_button", "reason": "顶部返回按钮"}},
+    {{"node_index": 5, "role": "bottom_tab", "reason": "底部导航-首页"}},
+    {{"node_index": 6, "role": "bottom_tab", "reason": "底部导航-消息"}}
+  ],
+  "page_type": "首页/商品详情/搜索结果/个人中心/...",
+  "page_function": "一句话描述页面功能"
+}}
+```
+
+role 类型：back_button, search, menu, top_tab, bottom_tab, fab, sidebar
+只返回 JSON。"""
 
     _PROMPT_OCR = ""  # 禁用单独的 OCR，OD 已包含文本
 
-    _PROMPT_CAPTION = """一句话描述这是什么 App 的什么页面。"""
+    _PROMPT_CAPTION = """用一句话描述这个 App 页面的**功能定位**。
+
+要求：
+- 描述页面的功能类型（如：首页、搜索页、商品详情页、个人中心、设置页、登录页等）
+- 描述主要功能入口（如：有搜索框、有底部导航、有商品列表等）
+- 不要描述具体内容（如商品名称、价格、用户名等动态数据）
+
+示例：
+- "电商App首页，包含搜索框、分类导航和商品推荐流"
+- "个人中心页面，显示用户信息和功能入口列表"
+- "商品详情页，展示商品图片、价格和购买按钮"
+"""
 
     def __init__(self, config: Optional[VLMConfig] = None):
         self.config = config or get_config()
@@ -286,6 +335,74 @@ label: tab, nav_item, button, icon, input, search
             return self._call_api(image_bytes, self._PROMPT_CAPTION).strip()
         except Exception as e:
             print(f"[VLMEngine] Caption failed: {e}")
+            return ""
+
+    def analyze_with_xml(
+        self,
+        screenshot_bytes: bytes,
+        xml_nodes: List[Dict]
+    ) -> Dict:
+        """
+        结合截图和 XML 节点进行联合分析
+
+        Args:
+            screenshot_bytes: 截图
+            xml_nodes: XML 节点列表，每个节点包含 bounds, text, resource_id, clickable 等
+
+        Returns:
+            {
+                "nav_anchors": [{"node_index": 0, "role": "back_button", "reason": "..."}],
+                "page_type": "首页",
+                "page_function": "..."
+            }
+        """
+        # 构建简化的 XML 节点描述
+        xml_desc_lines = []
+        for i, node in enumerate(xml_nodes[:50]):  # 最多 50 个节点
+            bounds = node.get('bounds', [0, 0, 0, 0])
+            text = node.get('text', '')[:30]  # 截断文本
+            res_id = node.get('resource_id', '')
+            if res_id:
+                res_id = res_id.split('/')[-1]  # 只保留 ID 部分
+            clickable = '可点击' if node.get('clickable') else ''
+            class_name = node.get('class_name', '').split('.')[-1]
+
+            # 格式：[索引] 类型 "文本" (resource_id) [bounds] 可点击
+            line = f"[{i}] {class_name}"
+            if text:
+                line += f' "{text}"'
+            if res_id:
+                line += f' ({res_id})'
+            line += f' [{bounds[0]},{bounds[1]},{bounds[2]},{bounds[3]}]'
+            if clickable:
+                line += f' {clickable}'
+            xml_desc_lines.append(line)
+
+        xml_desc = '\n'.join(xml_desc_lines)
+
+        # 构建 prompt
+        prompt = self._PROMPT_JOINT_ANALYSIS.format(xml_nodes=xml_desc)
+
+        try:
+            response = self._call_api(screenshot_bytes, prompt)
+            result = self._parse_json(response)
+
+            # 确保返回格式正确
+            if 'nav_anchors' not in result:
+                result['nav_anchors'] = []
+            if 'page_type' not in result:
+                result['page_type'] = ''
+            if 'page_function' not in result:
+                result['page_function'] = ''
+
+            return result
+        except Exception as e:
+            print(f"[VLMEngine] Joint analysis failed: {e}")
+            return {
+                "nav_anchors": [],
+                "page_type": "",
+                "page_function": ""
+            }
             return ""
 
     def infer(self, screenshot_bytes: bytes, bypass_cache: bool = False) -> VLMPageResult:
@@ -529,3 +646,7 @@ label: tab, nav_item, button, icon, input, search
     def clear_cache(self):
         """清空缓存"""
         self._cache.clear()
+
+    def get_stats(self) -> Dict:
+        """获取统计信息"""
+        return self.stats.copy()

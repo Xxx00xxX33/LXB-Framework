@@ -117,6 +117,16 @@
             border-color: #00d4ff;
             box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
         }
+        .form-group select:focus {
+            outline: none;
+            border-color: #00d4ff;
+            box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.1);
+        }
+        .form-group select option {
+            background: #1a1a2e;
+            color: #eee;
+            padding: 8px;
+        }
 
         /* 按钮 */
         .btn {
@@ -448,8 +458,15 @@
 </head>
 <body>
     <div class="header">
-        <h1>🚀 LXB Map Builder v2</h1>
+        <h1>🚀 LXB Map Builder</h1>
         <div style="display: flex; gap: 12px; align-items: center;">
+            <select id="explore-version" style="padding: 6px 12px; background: #1e1e38; border: 1px solid #3a3a5a; border-radius: 6px; color: #fff; font-size: 12px;">
+                <option value="node" selected>v5 Node驱动 (推荐)</option>
+                <option value="coord">v4 坐标驱动</option>
+                <option value="som">v3 SoM 标注</option>
+                <option value="v3">v3 语义探索</option>
+                <option value="v2">v2 VLM+XML</option>
+            </select>
             <span id="connection-status" class="status" style="margin: 0; padding: 6px 12px;">
                 <span class="loading"></span> 连接中...
             </span>
@@ -523,7 +540,18 @@
             <div class="card">
                 <h3>🎯 探索配置</h3>
                 <div class="form-group">
-                    <label>应用包名</label>
+                    <label>选择应用</label>
+                    <div style="display: flex; gap: 8px;">
+                        <select id="app-select" style="flex: 1;" onchange="onAppSelect()">
+                            <option value="">-- 点击刷新获取应用列表 --</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="refreshAppList()" title="刷新应用列表" style="padding: 8px 12px;">
+                            🔄
+                        </button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>应用包名 <span style="color: #666; font-size: 10px;">(可手动输入)</span></label>
                     <input type="text" id="package-name" placeholder="com.example.app">
                 </div>
                 <div class="form-group">
@@ -538,7 +566,9 @@
                     <button class="btn btn-success" id="btn-start" style="flex: 1;" onclick="startExploration()">
                         ▶ 开始探索
                     </button>
-                    <button class="btn btn-danger hidden" id="btn-stop" onclick="stopExploration()">⏹ 停止</button>
+                    <button class="btn btn-secondary hidden" id="btn-pause" onclick="pauseExploration()">⏸ 暂停</button>
+                    <button class="btn btn-secondary hidden" id="btn-resume" onclick="resumeExploration()">▶ 继续</button>
+                    <button class="btn btn-secondary hidden" id="btn-stop" style="background: #e94560; color: #fff;" onclick="stopExploration()">⏹ 停止</button>
                 </div>
             </div>
 
@@ -554,7 +584,8 @@
 
         <!-- 中间面板 - 截图可视化 -->
         <div class="center-panel" id="center-panel">
-            <div class="toolbar" style="width: 100%; max-width: 500px;">
+            <!-- 手动分析工具栏（非探索时显示） -->
+            <div class="toolbar" id="manual-toolbar" style="width: 100%; max-width: 500px;">
                 <button class="btn btn-secondary" onclick="captureAndAnalyze()">
                     📸 截图并分析
                 </button>
@@ -563,10 +594,54 @@
                 </button>
             </div>
 
+            <!-- 探索时工具栏 -->
+            <div class="toolbar hidden" id="explore-toolbar" style="width: 100%; max-width: 100%;">
+                <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                    <span id="explore-status-badge" style="padding: 6px 12px; background: #2a2a4a; border-radius: 6px; font-size: 12px;">
+                        ⏳ 等待开始...
+                    </span>
+                    <span id="explore-stats-inline" style="font-size: 12px; color: #888;">
+                        页面: 0 | 动作: 0 | 队列: 0
+                    </span>
+                </div>
+            </div>
+
+            <!-- 手动分析截图区域 -->
             <div id="screenshot-area">
                 <div class="empty-state">
                     <div class="empty-state-icon">📱</div>
                     <p>点击"截图并分析"开始分析当前页面</p>
+                </div>
+            </div>
+
+            <!-- 探索时实时可视化区域 -->
+            <div id="explore-realtime-area" class="hidden" style="width: 100%; display: flex; gap: 20px; flex: 1; overflow: hidden;">
+                <!-- 左侧：实时截图 -->
+                <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
+                    <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                        <span style="color: #00d4ff; font-weight: 500;">📸 实时截图</span>
+                        <span id="rt-activity-badge" style="font-size: 11px; padding: 2px 8px; background: #2a2a4a; border-radius: 4px; color: #888;">-</span>
+                    </div>
+                    <div id="rt-screenshot-large" style="flex: 1; display: flex; align-items: center; justify-content: center; background: #0a0a14; border-radius: 12px; overflow: hidden; min-height: 400px;">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📱</div>
+                            <p>等待探索开始...</p>
+                        </div>
+                    </div>
+                    <div id="rt-current-action" style="margin-top: 8px; font-size: 11px; color: #888; text-align: center;">
+                        最后动作: -
+                    </div>
+                </div>
+
+                <!-- 右侧：页面拓扑图 -->
+                <div style="width: 320px; display: flex; flex-direction: column; flex-shrink: 0;">
+                    <div style="margin-bottom: 12px; color: #7b68ee; font-weight: 500;">🗺️ 页面拓扑</div>
+                    <div id="rt-graph-large" style="flex: 1; background: #16162a; border-radius: 12px; padding: 16px; overflow-y: auto;">
+                        <div class="empty-state" style="padding: 40px 20px;">
+                            <div class="empty-state-icon" style="font-size: 48px;">🔗</div>
+                            <p>等待发现页面...</p>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -583,6 +658,7 @@
             <div class="section-tabs">
                 <button class="section-tab active" onclick="switchRightTab('elements')">UI 元素</button>
                 <button class="section-tab" onclick="switchRightTab('pages')">页面列表</button>
+                <button class="section-tab" onclick="switchRightTab('realtime')">实时监控</button>
             </div>
 
             <!-- UI 元素面板 -->
@@ -637,6 +713,45 @@
                 <div style="margin-top: 16px;">
                     <button class="btn btn-secondary" style="width: 100%;" onclick="saveResult()">
                         💾 保存结果
+                    </button>
+                </div>
+            </div>
+
+            <!-- 实时监控面板（简化版，主要内容在中间面板） -->
+            <div id="tab-realtime" class="hidden">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="rt-pages">0</div>
+                        <div class="stat-label">已发现页面</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="rt-actions">0</div>
+                        <div class="stat-label">总动作数</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="rt-queue">0</div>
+                        <div class="stat-label">队列剩余</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="rt-time">0s</div>
+                        <div class="stat-label">已用时间</div>
+                    </div>
+                </div>
+
+                <!-- 当前节点列表 -->
+                <div class="card">
+                    <h3>🎯 当前页面节点</h3>
+                    <div id="rt-nodes-list" style="max-height: 400px; overflow-y: auto;">
+                        <div class="empty-state" style="padding: 20px;">
+                            <div class="empty-state-icon" style="font-size: 32px;">📋</div>
+                            <p style="font-size: 11px;">等待探索开始...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 12px;">
+                    <button class="btn btn-secondary" style="width: 100%;" onclick="refreshRealtime()">
+                        🔄 刷新状态
                     </button>
                 </div>
             </div>
@@ -847,6 +962,64 @@
                 }
             } catch (e) {
                 addLog('error', `测试失败: ${e.message}`);
+            }
+        }
+
+        // ========== 应用列表功能 ==========
+        let appList = [];
+
+        // 刷新应用列表
+        async function refreshAppList() {
+            const select = document.getElementById('app-select');
+            select.innerHTML = '<option value="">加载中...</option>';
+            select.disabled = true;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/command/list_apps`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filter: 'user' })
+                });
+                const data = await res.json();
+
+                if (data.success && data.response.apps) {
+                    appList = data.response.apps;
+
+                    // 按包名排序
+                    appList.sort((a, b) => a.package.localeCompare(b.package));
+
+                    // 构建选项
+                    select.innerHTML = '<option value="">-- 选择应用 (' + appList.length + ' 个) --</option>';
+                    appList.forEach(app => {
+                        const option = document.createElement('option');
+                        option.value = app.package;
+                        // 显示格式：应用名 (包名简写)
+                        const shortPkg = app.package.split('.').slice(-2).join('.');
+                        option.textContent = `${app.name} (${shortPkg})`;
+                        option.title = app.package;  // 完整包名作为 tooltip
+                        select.appendChild(option);
+                    });
+
+                    addLog('info', `获取到 ${appList.length} 个用户应用`);
+                } else {
+                    select.innerHTML = '<option value="">获取失败，请重试</option>';
+                    addLog('error', data.message || '获取应用列表失败');
+                }
+            } catch (e) {
+                select.innerHTML = '<option value="">获取失败，请重试</option>';
+                addLog('error', `获取应用列表失败: ${e.message}`);
+            }
+
+            select.disabled = false;
+        }
+
+        // 选择应用
+        function onAppSelect() {
+            const select = document.getElementById('app-select');
+            const packageInput = document.getElementById('package-name');
+
+            if (select.value) {
+                packageInput.value = select.value;
             }
         }
 
@@ -1175,9 +1348,12 @@
 
             document.getElementById('tab-elements').classList.toggle('hidden', tab !== 'elements');
             document.getElementById('tab-pages').classList.toggle('hidden', tab !== 'pages');
+            document.getElementById('tab-realtime').classList.toggle('hidden', tab !== 'realtime');
 
             if (tab === 'pages') {
                 refreshPages();
+            } else if (tab === 'realtime') {
+                refreshRealtime();
             }
         }
 
@@ -1189,34 +1365,65 @@
                 return;
             }
 
+            const version = document.getElementById('explore-version').value;
             const config = {
                 package: packageName,
                 max_pages: parseInt(document.getElementById('max-pages').value),
                 max_depth: parseInt(document.getElementById('max-depth').value),
-                // VLM 并发配置
+                // VLM 并发配置 (v2)
                 vlm_concurrent_enabled: document.getElementById('vlm-concurrent-enabled').checked,
                 vlm_concurrent_requests: parseInt(document.getElementById('vlm-concurrent-requests').value) || 5,
                 vlm_occurrence_threshold: parseInt(document.getElementById('vlm-occurrence-threshold').value) || 2
             };
 
+            // 更新按钮状态
             document.getElementById('btn-start').classList.add('hidden');
+            document.getElementById('btn-pause').classList.remove('hidden');
+            document.getElementById('btn-resume').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
             document.getElementById('logs').innerHTML = '';
             logIndex = 0;
 
-            addLog('info', `开始探索: ${packageName}`);
+            addLog('info', `[${version}] 开始探索: ${packageName}`);
 
-            // 显示并发配置状态
-            if (config.vlm_concurrent_enabled) {
-                addLog('info', `🚀 VLM 并发模式: ${config.vlm_concurrent_requests} 次并发, 阈值 ${config.vlm_occurrence_threshold}`);
+            // 显示版本特性
+            if (version === 'node') {
+                addLog('info', `🎯 Node驱动: 以节点为单位探索，每次从首页开始`);
+            } else if (version === 'coord') {
+                addLog('info', `📍 坐标驱动: VLM 输出坐标 → 映射 XML → 点击`);
+            } else if (version === 'som') {
+                addLog('info', `📸 SoM 模式: 截图标注 + VLM 选择编号`);
+            } else if (version === 'v3') {
+                addLog('info', `🧠 语义 ID 去重 + 精确路径记录`);
             } else {
-                addLog('info', `VLM 单次推理模式`);
+                if (config.vlm_concurrent_enabled) {
+                    addLog('info', `🚀 VLM 并发模式: ${config.vlm_concurrent_requests} 次并发`);
+                }
             }
+
+            // 切换到探索模式
+            enterExploreMode();
+            switchRightTab('realtime');
+            startRealtimePolling();
 
             pollInterval = setInterval(pollLogs, 1000);
 
+            // 根据版本选择 API
+            let apiUrl;
+            if (version === 'node') {
+                apiUrl = `${API_BASE}/api/explore/node/start`;
+            } else if (version === 'coord') {
+                apiUrl = `${API_BASE}/api/explore/coord/start`;
+            } else if (version === 'som') {
+                apiUrl = `${API_BASE}/api/explore/som/start`;
+            } else if (version === 'v3') {
+                apiUrl = `${API_BASE}/api/explore/v3/start`;
+            } else {
+                apiUrl = `${API_BASE}/api/explore/start`;
+            }
+
             try {
-                const res = await fetch(`${API_BASE}/api/explore/start`, {
+                const res = await fetch(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(config)
@@ -1224,21 +1431,86 @@
                 const data = await res.json();
 
                 clearInterval(pollInterval);
+                stopRealtimePolling();
 
                 if (data.success) {
                     addLog('info', data.message);
                     updateStats(data.result);
                     switchRightTab('pages');
+
+                    // v3/v4 自动刷新导航图
+                    if (version === 'v3' || version === 'som' || version === 'coord') {
+                        refreshV3Graph();
+                    }
                 } else {
                     addLog('error', data.message);
                 }
             } catch (e) {
                 clearInterval(pollInterval);
+                stopRealtimePolling();
                 addLog('error', `探索失败: ${e.message}`);
             }
 
+            // 恢复按钮状态
             document.getElementById('btn-start').classList.remove('hidden');
+            document.getElementById('btn-pause').classList.add('hidden');
+            document.getElementById('btn-resume').classList.add('hidden');
             document.getElementById('btn-stop').classList.add('hidden');
+
+            // 退出探索模式
+            exitExploreMode();
+        }
+
+        // 暂停探索
+        async function pauseExploration() {
+            try {
+                const res = await fetch(`${API_BASE}/api/explore/pause`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    addLog('warn', `⏸️ ${data.message}`);
+                    document.getElementById('btn-pause').classList.add('hidden');
+                    document.getElementById('btn-resume').classList.remove('hidden');
+                } else {
+                    addLog('error', data.message);
+                }
+            } catch (e) {
+                addLog('error', `暂停失败: ${e.message}`);
+            }
+        }
+
+        // 恢复探索
+        async function resumeExploration() {
+            try {
+                const res = await fetch(`${API_BASE}/api/explore/resume`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    addLog('info', `▶️ ${data.message}`);
+                    document.getElementById('btn-pause').classList.remove('hidden');
+                    document.getElementById('btn-resume').classList.add('hidden');
+                } else {
+                    addLog('error', data.message);
+                }
+            } catch (e) {
+                addLog('error', `恢复失败: ${e.message}`);
+            }
+        }
+
+        // 停止探索
+        async function stopExploration() {
+            if (!confirm('确定要停止探索吗？当前进度将被保存。')) {
+                return;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/api/explore/stop`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    addLog('warn', `⏹️ ${data.message}`);
+                } else {
+                    addLog('error', data.message);
+                }
+            } catch (e) {
+                addLog('error', `停止失败: ${e.message}`);
+            }
         }
 
         // 轮询日志
@@ -1268,8 +1540,16 @@
             }
         }
 
-        // 刷新页面列表
+        // 刷新页面列表 - 兼容 v2 和 v3
         async function refreshPages() {
+            const version = document.getElementById('explore-version').value;
+
+            if (version === 'v3') {
+                await refreshV3Graph();
+                return;
+            }
+
+            // v2 原有逻辑
             try {
                 const res = await fetch(`${API_BASE}/api/explore/result/pages`);
                 const data = await res.json();
@@ -1301,6 +1581,120 @@
             } catch (e) {
                 console.error('Refresh error:', e);
             }
+        }
+
+        // 刷新 v3 导航图
+        async function refreshV3Graph() {
+            try {
+                const res = await fetch(`${API_BASE}/api/explore/v3/graph`);
+                const data = await res.json();
+
+                if (data.success) {
+                    const graphData = data.data;
+                    document.getElementById('stat-pages').textContent = graphData.page_count || 0;
+                    document.getElementById('stat-transitions').textContent = graphData.transition_count || 0;
+
+                    const listEl = document.getElementById('page-list');
+                    if (!graphData.pages || graphData.pages.length === 0) {
+                        listEl.innerHTML = `
+                            <div class="empty-state">
+                                <div class="empty-state-icon">📄</div>
+                                <p>暂无页面</p>
+                            </div>
+                        `;
+                        return;
+                    }
+
+                    listEl.innerHTML = graphData.pages.map(page => `
+                        <div class="page-item" onclick="showV3PageDetail('${page.semantic_id}')">
+                            <div class="page-item-name">${page.semantic_id}</div>
+                            <div style="font-size: 10px; color: #7b68ee; margin-bottom: 4px;">${page.page_type}</div>
+                            <div class="page-item-desc">${page.description || '无描述'}</div>
+                            <div style="font-size: 10px; color: #666; margin-top: 4px;">
+                                锚点: ${page.nav_anchors?.length || 0} | Activity: ${page.activity?.split('.')?.pop() || '-'}
+                            </div>
+                        </div>
+                    `).join('');
+
+                    addLog('info', `导航图: ${graphData.page_count} 页面, ${graphData.transition_count} 跳转`);
+                }
+            } catch (e) {
+                console.error('Refresh v3 graph error:', e);
+            }
+        }
+
+        // 显示 v3 页面详情
+        function showV3PageDetail(semanticId) {
+            // 从缓存的图数据中查找
+            fetch(`${API_BASE}/api/explore/v3/graph`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        const page = data.data.pages.find(p => p.semantic_id === semanticId);
+                        if (page) {
+                            // 切换到元素面板
+                            switchRightTab('elements');
+
+                            // 显示锚点作为元素
+                            const anchors = page.nav_anchors || [];
+                            displayV3Anchors(anchors);
+
+                            // 更新描述
+                            document.getElementById('page-caption').textContent =
+                                `[${page.page_type}] ${page.description || '暂无描述'}`;
+                            document.getElementById('analysis-result').classList.remove('hidden');
+
+                            addLog('info', `加载页面: ${semanticId} (${anchors.length} 个锚点)`);
+                        }
+                    }
+                });
+        }
+
+        // 显示 v3 锚点列表
+        function displayV3Anchors(anchors) {
+            const container = document.getElementById('ui-elements');
+            const totalEl = document.getElementById('stat-total');
+            const clickableEl = document.getElementById('stat-clickable');
+
+            totalEl.textContent = anchors.length;
+            clickableEl.textContent = anchors.length;
+
+            if (anchors.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🔍</div>
+                        <p>该页面没有导航锚点</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // 角色颜色映射
+            const roleColors = {
+                'back_button': '#e94560',
+                'search': '#00d4ff',
+                'menu': '#ffc107',
+                'top_tab': '#7b68ee',
+                'bottom_tab': '#00d4aa',
+                'fab': '#ff6b6b',
+                'sidebar': '#9b59b6',
+                'other': '#888'
+            };
+
+            container.innerHTML = anchors.map((anchor, idx) => `
+                <div class="ui-element" data-index="${idx}">
+                    <div class="ui-element-header">
+                        <span class="ui-element-type" style="background: ${roleColors[anchor.role] || '#888'}20; color: ${roleColors[anchor.role] || '#888'};">
+                            ${anchor.role}
+                        </span>
+                        <span style="font-size: 10px; color: #666;">#${anchor.anchor_id}</span>
+                    </div>
+                    <div class="ui-element-text">${anchor.description || '(无描述)'}</div>
+                    ${anchor.locator?.resource_id ? `<div class="ui-element-ocr">ID: ${anchor.locator.resource_id}</div>` : ''}
+                    ${anchor.locator?.text ? `<div class="ui-element-ocr">Text: ${anchor.locator.text}</div>` : ''}
+                    ${anchor.locator?.bounds ? `<div class="ui-element-bbox">Bounds: [${anchor.locator.bounds.join(', ')}]</div>` : ''}
+                </div>
+            `).join('');
         }
 
         // 显示页面详情
@@ -1336,10 +1730,15 @@
             }
         }
 
-        // 保存结果
+        // 保存结果 - 兼容 v2 和 v3
         async function saveResult() {
+            const version = document.getElementById('explore-version').value;
+            const apiUrl = version === 'v3'
+                ? `${API_BASE}/api/explore/v3/save`
+                : `${API_BASE}/api/explore/save`;
+
             try {
-                const res = await fetch(`${API_BASE}/api/explore/save`, {
+                const res = await fetch(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({})
@@ -1347,7 +1746,7 @@
                 const data = await res.json();
                 if (data.success) {
                     addLog('info', data.message);
-                    alert(`已保存到: ${data.path}`);
+                    alert(`已保存: ${data.filepath || data.path || '成功'}`);
                 } else {
                     addLog('error', data.message);
                 }
@@ -1367,9 +1766,378 @@
             logsEl.scrollTop = logsEl.scrollHeight;
         }
 
-        // 停止探索
-        function stopExploration() {
-            addLog('warn', '停止功能暂未实现');
+        // ========== 实时监控功能 ==========
+        let realtimeInterval = null;
+        let isExploring = false;
+
+        // 切换到探索模式（显示中间面板的实时可视化）
+        function enterExploreMode() {
+            isExploring = true;
+            document.getElementById('manual-toolbar').classList.add('hidden');
+            document.getElementById('explore-toolbar').classList.remove('hidden');
+            document.getElementById('screenshot-area').classList.add('hidden');
+            document.getElementById('analysis-result').classList.add('hidden');
+            document.getElementById('explore-realtime-area').classList.remove('hidden');
+        }
+
+        // 退出探索模式
+        function exitExploreMode() {
+            isExploring = false;
+            document.getElementById('manual-toolbar').classList.remove('hidden');
+            document.getElementById('explore-toolbar').classList.add('hidden');
+            document.getElementById('screenshot-area').classList.remove('hidden');
+            document.getElementById('explore-realtime-area').classList.add('hidden');
+        }
+
+        // 刷新实时状态
+        async function refreshRealtime() {
+            try {
+                const res = await fetch(`${API_BASE}/api/explore/realtime`);
+                const data = await res.json();
+
+                if (data.success) {
+                    updateRealtimeUI(data.data);
+                } else {
+                    // 没有探索进行中
+                    document.getElementById('explore-status-badge').textContent = '⏳ 空闲';
+                }
+            } catch (e) {
+                console.error('Realtime fetch error:', e);
+            }
+        }
+
+        // 更新实时监控 UI
+        function updateRealtimeUI(state) {
+            // 状态映射
+            const statusMap = {
+                'idle': '⏳ 空闲',
+                'running': '🟢 运行中',
+                'paused': '🟡 已暂停',
+                'stopping': '🔴 正在停止',
+                'stopped': '⚫ 已停止',
+                'completed': '✅ 已完成'
+            };
+
+            const statusColors = {
+                'idle': '#888',
+                'running': '#00d4aa',
+                'paused': '#ffc107',
+                'stopping': '#e94560',
+                'stopped': '#666',
+                'completed': '#00d4ff'
+            };
+
+            // 更新统计（右侧面板）- 兼容 v2 和 v3
+            const stats = state.stats || {};
+            document.getElementById('rt-pages').textContent = stats.pages || stats.pages_discovered || 0;
+            document.getElementById('rt-actions').textContent = stats.actions || stats.total_actions || 0;
+            document.getElementById('rt-queue').textContent = stats.queue_size || 0;
+            document.getElementById('rt-time').textContent = `${Math.round(stats.elapsed || stats.elapsed_seconds || 0)}s`;
+
+            // 更新中间面板状态栏
+            const statusBadge = document.getElementById('explore-status-badge');
+            statusBadge.textContent = statusMap[state.status] || state.status;
+            statusBadge.style.background = statusColors[state.status] || '#2a2a4a';
+            statusBadge.style.color = state.status === 'running' ? '#000' : '#fff';
+
+            document.getElementById('explore-stats-inline').textContent =
+                `页面: ${stats.pages || stats.pages_discovered || 0} | 跳转: ${stats.transitions || 0} | 动作: ${stats.actions || stats.total_actions || 0} | 队列: ${stats.queue_size || 0}`;
+
+            // 更新当前页面标签 (v3 用 current_page)
+            document.getElementById('rt-activity-badge').textContent = state.current_page || state.current_activity || '-';
+
+            // 更新最后动作
+            if (state.last_action && state.last_action_node) {
+                const node = state.last_action_node;
+                document.getElementById('rt-current-action').textContent =
+                    `最后动作: ${state.last_action} @ (${node.center?.join(', ') || '-'}) ${node.text || ''}`;
+            } else if (state.last_action) {
+                document.getElementById('rt-current-action').textContent = `最后动作: ${state.last_action}`;
+            } else {
+                document.getElementById('rt-current-action').textContent = '最后动作: -';
+            }
+
+            // 更新中间面板大截图
+            if (state.current_screenshot) {
+                document.getElementById('rt-screenshot-large').innerHTML = `
+                    <img src="data:image/jpeg;base64,${state.current_screenshot}"
+                         style="max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer;"
+                         onclick="showFullScreenshot(this.src)"
+                         title="点击查看大图">
+                `;
+            }
+
+            // 更新中间面板拓扑图 (兼容 v2 和 v3)
+            if (state.graph) {
+                renderGraphLarge(state.graph);
+            }
+
+            // 更新右侧面板节点列表 (v5 用 node_list，旧版用 current_nodes)
+            if (state.node_list && state.node_list.length > 0) {
+                renderNodeListV5(state.node_list);
+            } else if (state.current_nodes && state.current_nodes.length > 0) {
+                renderNodesList(state.current_nodes);
+            }
+
+            // 更新 v5 统计
+            if (stats.total_nodes !== undefined) {
+                document.getElementById('rt-pages').textContent = stats.explored_nodes || 0;
+                document.getElementById('explore-stats-inline').textContent =
+                    `节点: ${stats.explored_nodes || 0}/${stats.total_nodes || 0} | 动作: ${stats.total_actions || 0} | 队列: ${stats.queue_size || 0}`;
+            }
+        }
+
+        // 渲染大拓扑图（中间面板）- 兼容 v2 和 v3
+        function renderGraphLarge(graph) {
+            const container = document.getElementById('rt-graph-large');
+            const nodes = graph.nodes || [];
+            const edges = graph.edges || [];
+
+            if (nodes.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="padding: 40px 20px;">
+                        <div class="empty-state-icon" style="font-size: 48px;">🔗</div>
+                        <p>等待发现页面...</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // 构建可视化的节点卡片
+            let html = '';
+
+            // 节点列表
+            nodes.forEach((node, i) => {
+                // v3 用 id (semantic_id), v2 用 activity
+                const nodeId = node.id || node.activity || `page_${i}`;
+                const nodeType = node.type || node.page_type || '';
+                const nodeDesc = node.desc || node.description || '无描述';
+                const isActive = nodeId === document.getElementById('rt-activity-badge')?.textContent;
+
+                html += `
+                    <div style="padding: 10px 12px; margin-bottom: 8px; background: ${isActive ? 'rgba(0, 212, 255, 0.15)' : '#1a1a2e'};
+                                border-radius: 8px; border-left: 3px solid ${isActive ? '#00d4ff' : '#3a3a5a'};">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                            <span style="width: 20px; height: 20px; background: linear-gradient(135deg, #00d4ff, #7b68ee);
+                                         border-radius: 50%; display: flex; align-items: center; justify-content: center;
+                                         font-size: 10px; color: #000; font-weight: bold;">${i + 1}</span>
+                            <span style="color: #fff; font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${nodeId}</span>
+                        </div>
+                        ${nodeType ? `<div style="color: #7b68ee; font-size: 10px; margin-left: 28px; margin-bottom: 2px;">${nodeType}</div>` : ''}
+                        <div style="color: #888; font-size: 11px; margin-left: 28px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${nodeDesc}</div>
+                    </div>
+                `;
+            });
+
+            // 边列表
+            if (edges.length > 0) {
+                html += '<div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #2a2a4a;">';
+                html += '<div style="color: #7b68ee; font-size: 11px; margin-bottom: 8px; font-weight: 500;">🔗 跳转关系 (' + edges.length + ')</div>';
+                edges.slice(0, 10).forEach(edge => {
+                    // v3 用 from/to, v2 也用 from/to
+                    const fromId = edge.from || '?';
+                    const toId = edge.to || '?';
+                    html += `
+                        <div style="padding: 6px 10px; margin-bottom: 4px; background: #1a1a2e; border-radius: 6px;
+                                    font-size: 11px; color: #888; display: flex; align-items: center; gap: 6px;">
+                            <span style="color: #00d4ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px;">${fromId}</span>
+                            <span style="color: #666;">→</span>
+                            <span style="color: #7b68ee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px;">${toId}</span>
+                        </div>
+                    `;
+                });
+                if (edges.length > 10) {
+                    html += `<div style="text-align: center; color: #666; font-size: 10px; padding: 4px;">还有 ${edges.length - 10} 个跳转...</div>`;
+                }
+                html += '</div>';
+            }
+
+            container.innerHTML = html;
+        }
+
+        // 渲染 v5 节点列表（右侧面板）
+        function renderNodeListV5(nodeList) {
+            const container = document.getElementById('rt-nodes-list');
+
+            if (!nodeList || nodeList.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="padding: 20px;">
+                        <div class="empty-state-icon" style="font-size: 32px;">📋</div>
+                        <p style="font-size: 11px;">暂无节点</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // 按探索状态分组：已探索、待探索
+            const explored = nodeList.filter(n => n.explored);
+            const pending = nodeList.filter(n => !n.explored);
+
+            let html = '';
+
+            // 统计信息
+            html += `
+                <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                    <div style="flex: 1; padding: 8px; background: rgba(0, 212, 170, 0.1); border-radius: 6px; text-align: center;">
+                        <div style="font-size: 18px; font-weight: bold; color: #00d4aa;">${explored.length}</div>
+                        <div style="font-size: 10px; color: #888;">已探索</div>
+                    </div>
+                    <div style="flex: 1; padding: 8px; background: rgba(255, 193, 7, 0.1); border-radius: 6px; text-align: center;">
+                        <div style="font-size: 18px; font-weight: bold; color: #ffc107;">${pending.length}</div>
+                        <div style="font-size: 10px; color: #888;">待探索</div>
+                    </div>
+                </div>
+            `;
+
+            // 待探索节点（优先显示）
+            if (pending.length > 0) {
+                html += `<div style="color: #ffc107; font-size: 11px; margin-bottom: 6px; font-weight: 500;">⏳ 待探索 (${pending.length})</div>`;
+                pending.slice(0, 10).forEach((node, idx) => {
+                    html += renderNodeItemV5(node, idx, false);
+                });
+                if (pending.length > 10) {
+                    html += `<div style="text-align: center; color: #666; font-size: 10px; padding: 4px;">还有 ${pending.length - 10} 个待探索...</div>`;
+                }
+            }
+
+            // 已探索节点
+            if (explored.length > 0) {
+                html += `<div style="color: #00d4aa; font-size: 11px; margin: 12px 0 6px 0; font-weight: 500;">✓ 已探索 (${explored.length})</div>`;
+                explored.slice(0, 15).forEach((node, idx) => {
+                    html += renderNodeItemV5(node, idx, true);
+                });
+                if (explored.length > 15) {
+                    html += `<div style="text-align: center; color: #666; font-size: 10px; padding: 4px;">还有 ${explored.length - 15} 个已探索...</div>`;
+                }
+            }
+
+            container.innerHTML = html;
+        }
+
+        // 渲染单个 v5 节点项
+        function renderNodeItemV5(node, idx, explored) {
+            const borderColor = explored ? '#00d4aa' : '#ffc107';
+            const bgColor = explored ? 'rgba(0, 212, 170, 0.05)' : 'rgba(255, 193, 7, 0.05)';
+            const statusIcon = explored ? '✓' : '○';
+
+            // 角色图标
+            const roleIcons = {
+                'bottom_tab': '📱',
+                'top_tab': '📑',
+                'back': '⬅️',
+                'jump': '🔗',
+                'input': '✏️',
+                'search': '🔍',
+                'menu': '☰',
+                'other': '•'
+            };
+            const roleIcon = roleIcons[node.role] || '•';
+
+            // 深度显示
+            const depthBadge = node.depth !== undefined
+                ? `<span style="font-size: 9px; padding: 1px 4px; background: #2a2a4a; border-radius: 3px; color: #888;">D${node.depth}</span>`
+                : '';
+
+            return `
+                <div style="padding: 8px 10px; margin-bottom: 6px; background: ${bgColor}; border-radius: 6px;
+                            border-left: 2px solid ${borderColor};">
+                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+                        <span style="font-size: 10px; color: ${borderColor};">${statusIcon}</span>
+                        <span style="font-size: 12px;">${roleIcon}</span>
+                        <span style="color: #fff; font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            ${node.description || node.node_key || '(未知)'}
+                        </span>
+                        ${depthBadge}
+                    </div>
+                    <div style="font-size: 10px; color: #666; margin-left: 32px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        ${node.node_key || ''}
+                    </div>
+                    ${node.target_description ? `
+                        <div style="font-size: 10px; color: #7b68ee; margin-left: 32px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            → ${node.target_description}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        // 渲染节点列表（右侧面板）- 旧版
+        function renderNodesList(nodes) {
+            const container = document.getElementById('rt-nodes-list');
+
+            if (!nodes || nodes.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="padding: 20px;">
+                        <div class="empty-state-icon" style="font-size: 32px;">📋</div>
+                        <p style="font-size: 11px;">暂无节点</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // 只显示可交互节点
+            const interactiveNodes = nodes.filter(n => n.clickable || n.editable || n.scrollable);
+
+            container.innerHTML = interactiveNodes.slice(0, 20).map((node, idx) => {
+                const typeIcon = node.clickable ? '👆' : (node.editable ? '✏️' : '📜');
+                const typeColor = node.clickable ? '#00d4ff' : (node.editable ? '#00d4aa' : '#ffc107');
+                return `
+                    <div style="padding: 8px 10px; margin-bottom: 6px; background: #1a1a2e; border-radius: 6px;
+                                border-left: 2px solid ${typeColor};">
+                        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
+                            <span style="font-size: 12px;">${typeIcon}</span>
+                            <span style="color: #fff; font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                ${node.text || node.label || node.node_id}
+                            </span>
+                            <span style="font-size: 10px; color: #666;">#${idx + 1}</span>
+                        </div>
+                        <div style="font-size: 10px; color: #666; margin-left: 22px;">
+                            (${node.center?.join(', ') || '-'})
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            if (interactiveNodes.length > 20) {
+                container.innerHTML += `
+                    <div style="text-align: center; color: #666; font-size: 11px; padding: 8px;">
+                        还有 ${interactiveNodes.length - 20} 个节点...
+                    </div>
+                `;
+            }
+        }
+
+        // 显示全屏截图
+        function showFullScreenshot(src) {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.9); z-index: 9999;
+                display: flex; align-items: center; justify-content: center;
+                cursor: pointer;
+            `;
+            overlay.onclick = () => overlay.remove();
+
+            const img = document.createElement('img');
+            img.src = src;
+            img.style.cssText = 'max-width: 90%; max-height: 90%; border-radius: 12px;';
+
+            overlay.appendChild(img);
+            document.body.appendChild(overlay);
+        }
+
+        // 开始实时监控轮询
+        function startRealtimePolling() {
+            if (realtimeInterval) return;
+            realtimeInterval = setInterval(refreshRealtime, 2000);
+        }
+
+        // 停止实时监控轮询
+        function stopRealtimePolling() {
+            if (realtimeInterval) {
+                clearInterval(realtimeInterval);
+                realtimeInterval = null;
+            }
         }
     </script>
 </body>

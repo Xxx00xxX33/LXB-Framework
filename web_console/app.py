@@ -563,13 +563,22 @@ def cmd_list_apps():
 
     try:
         apps = client.list_apps(filter_type)
+
+        # 尝试获取应用名称（通过 adb 命令）
+        apps_with_names = []
+        for pkg in apps:
+            apps_with_names.append({
+                'package': pkg,
+                'name': pkg.split('.')[-1]  # 默认使用包名最后一段作为名称
+            })
+
         return jsonify({
             'success': True,
             'message': f'获取应用列表成功: {len(apps)} 个应用',
             'response': {
                 'filter': filter_type,
                 'count': len(apps),
-                'apps': apps
+                'apps': apps_with_names
             }
         })
     except Exception as e:
@@ -630,26 +639,31 @@ def cmd_screenshot_raw():
 
 
 # =============================================================================
-# Auto Map Builder v2 (VLM + XML 融合建图)
+# Auto Map Builder v2/v3
 # =============================================================================
 
 # 检测 VLM 是否可用
 VLM_AVAILABLE = False
 try:
-    from src.auto_map_builder import AutoMapBuilder, ExplorationConfig
+    from src.auto_map_builder import (
+        AutoMapBuilder, SemanticMapBuilder, SoMMapBuilder, CoordMapBuilder,
+        ExplorationConfig
+    )
     from src.auto_map_builder.vlm_engine import VLMEngine
     from src.auto_map_builder.fusion_engine import FusionEngine, parse_xml_nodes
     from src.auto_map_builder.page_manager import PageManager
+    from src.auto_map_builder.som_annotator import create_annotated_screenshot
     VLM_AVAILABLE = True
 except ImportError as e:
     print(f"[app.py] Auto Map Builder 不可用: {e}")
 
 # 全局探索器实例和状态
-explorer_instance = None
+explorer_instance = None  # v2: AutoMapBuilder, v3: SemanticMapBuilder
 exploration_result = None
 exploration_status = {
     'running': False,
     'package': None,
+    'version': 'v2',  # v2 或 v3
     'progress': {
         'pages_discovered': 0,
         'nodes_discovered': 0,
@@ -768,7 +782,77 @@ def explore_start():
 @app.route('/api/explore/status', methods=['GET'])
 def explore_status():
     """获取探索状态"""
+    global explorer_instance
+
+    # 如果有探索器实例，获取实际状态
+    if explorer_instance:
+        try:
+            from src.auto_map_builder import ExplorationStatus
+            actual_status = explorer_instance.status
+            exploration_status['status'] = actual_status.value
+            exploration_status['running'] = actual_status == ExplorationStatus.RUNNING
+            exploration_status['paused'] = actual_status == ExplorationStatus.PAUSED
+        except Exception:
+            pass
+
     return jsonify(exploration_status)
+
+
+@app.route('/api/explore/pause', methods=['POST'])
+def explore_pause():
+    """暂停探索"""
+    global explorer_instance
+
+    if not explorer_instance:
+        return jsonify({'success': False, 'message': '没有正在进行的探索'}), 400
+
+    try:
+        explorer_instance.pause()
+        return jsonify({
+            'success': True,
+            'message': '探索已暂停',
+            'status': explorer_instance.status.value
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/explore/resume', methods=['POST'])
+def explore_resume():
+    """恢复探索"""
+    global explorer_instance
+
+    if not explorer_instance:
+        return jsonify({'success': False, 'message': '没有正在进行的探索'}), 400
+
+    try:
+        explorer_instance.resume()
+        return jsonify({
+            'success': True,
+            'message': '探索已恢复',
+            'status': explorer_instance.status.value
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/explore/stop', methods=['POST'])
+def explore_stop():
+    """终止探索"""
+    global explorer_instance
+
+    if not explorer_instance:
+        return jsonify({'success': False, 'message': '没有正在进行的探索'}), 400
+
+    try:
+        explorer_instance.stop()
+        return jsonify({
+            'success': True,
+            'message': '正在终止探索',
+            'status': explorer_instance.status.value
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @app.route('/api/explore/logs', methods=['GET'])
@@ -781,6 +865,695 @@ def explore_logs():
         'logs': logs[since:],
         'total': len(logs)
     })
+
+
+@app.route('/api/explore/realtime', methods=['GET'])
+def explore_realtime():
+    """获取实时探索状态（用于可视化）"""
+    global explorer_instance
+
+    if not explorer_instance:
+        return jsonify({
+            'success': False,
+            'message': '没有正在进行的探索'
+        }), 400
+
+    try:
+        # v3 使用 get_realtime_state 方法
+        if hasattr(explorer_instance, 'get_realtime_state'):
+            realtime_state = explorer_instance.get_realtime_state()
+        # v2 使用 _explorer.get_realtime_state
+        elif hasattr(explorer_instance, '_explorer') and explorer_instance._explorer:
+            realtime_state = explorer_instance._explorer.get_realtime_state()
+        else:
+            realtime_state = {}
+
+        return jsonify({
+            'success': True,
+            'data': realtime_state
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': str(e)
+        }), 500
+
+
+# =============================================================================
+# Auto Map Builder v3 - 语义探索 API
+# =============================================================================
+
+@app.route('/api/explore/v3/start', methods=['POST'])
+def explore_v3_start():
+    """启动 v3 语义探索"""
+    global client, explorer_instance, exploration_result, exploration_status
+
+    if not client:
+        return jsonify({'success': False, 'message': '未连接设备'}), 400
+
+    if exploration_status['running']:
+        return jsonify({'success': False, 'message': '探索正在进行中'}), 400
+
+    if not VLM_AVAILABLE:
+        return jsonify({'success': False, 'message': 'Auto Map Builder 模块不可用'}), 400
+
+    data = request.json
+    package_name = data.get('package', '')
+
+    if not package_name:
+        return jsonify({'success': False, 'message': '请指定应用包名'}), 400
+
+    try:
+        from datetime import datetime
+
+        # 创建配置
+        config = ExplorationConfig(
+            max_pages=data.get('max_pages', 30),
+            max_depth=data.get('max_depth', 5),
+            max_time_seconds=data.get('max_time_seconds', 1800),
+            action_delay_ms=data.get('action_delay_ms', 800),
+            output_dir=data.get('output_dir', './maps')
+        )
+
+        # 日志回调
+        def log_callback(level, message, log_data=None):
+            log_entry = {
+                'time': datetime.now().strftime('%H:%M:%S'),
+                'level': level,
+                'message': message,
+                'data': log_data
+            }
+            exploration_status['logs'].append(log_entry)
+
+        # 清空日志
+        exploration_status['logs'] = []
+
+        # 创建 v3 探索器
+        explorer_instance = SemanticMapBuilder(client, config, log_callback)
+
+        # 更新状态
+        exploration_status['running'] = True
+        exploration_status['package'] = package_name
+        exploration_status['version'] = 'v3'
+        exploration_status['progress'] = {
+            'pages_discovered': 0,
+            'transitions_discovered': 0,
+            'current_page': None
+        }
+        exploration_status['result'] = None
+
+        log_callback('info', f'[v3] 开始语义探索: {package_name}')
+
+        # 执行探索
+        exploration_result = explorer_instance.explore(package_name)
+
+        # 更新结果
+        exploration_status['running'] = False
+        exploration_status['progress'] = {
+            'pages_discovered': len(exploration_result.graph.pages),
+            'transitions_discovered': len(exploration_result.graph.transitions),
+            'current_page': 'completed'
+        }
+        exploration_status['result'] = {
+            'pages': len(exploration_result.graph.pages),
+            'transitions': len(exploration_result.graph.transitions),
+            'time': round(exploration_result.exploration_time_seconds, 2),
+            'vlm_inferences': exploration_result.vlm_inference_count,
+            'vlm_time_ms': round(exploration_result.vlm_total_time_ms, 2),
+            'actions': exploration_result.total_actions
+        }
+
+        return jsonify({
+            'success': True,
+            'message': f'[v3] 探索完成: {len(exploration_result.graph.pages)} 个页面, {len(exploration_result.graph.transitions)} 个跳转',
+            'result': exploration_status['result']
+        })
+
+    except Exception as e:
+        import traceback
+        exploration_status['running'] = False
+        return jsonify({
+            'success': False,
+            'message': f'探索失败: {str(e)}',
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/explore/v3/graph', methods=['GET'])
+def explore_v3_graph():
+    """获取 v3 导航图"""
+    global explorer_instance
+
+    if not explorer_instance:
+        return jsonify({'success': False, 'message': '没有探索结果'}), 400
+
+    # 检查是否是 v3 探索器
+    if not hasattr(explorer_instance, 'graph') or explorer_instance.graph is None:
+        return jsonify({'success': False, 'message': '当前不是 v3 探索或没有导航图'}), 400
+
+    try:
+        graph = explorer_instance.graph
+
+        # 序列化页面
+        pages = []
+        for page in graph.pages.values():
+            anchors = []
+            for anchor in page.nav_anchors:
+                anchors.append({
+                    'anchor_id': anchor.anchor_id,
+                    'role': anchor.role,
+                    'description': anchor.description,
+                    'locator': {
+                        'resource_id': anchor.locator.resource_id,
+                        'text': anchor.locator.text,
+                        'bounds': list(anchor.locator.bounds) if anchor.locator.bounds else None
+                    }
+                })
+
+            pages.append({
+                'semantic_id': page.semantic_id,
+                'page_type': page.page_type,
+                'sub_state': page.sub_state,
+                'activity': page.activity,
+                'description': page.description,
+                'nav_anchors': anchors
+            })
+
+        # 序列化跳转
+        transitions = []
+        for trans in graph.transitions:
+            transitions.append({
+                'from_page': trans.from_page,
+                'to_page': trans.to_page,
+                'anchor_id': trans.anchor_id,
+                'locator': {
+                    'resource_id': trans.locator.resource_id if trans.locator else None,
+                    'text': trans.locator.text if trans.locator else None,
+                    'bounds': list(trans.locator.bounds) if trans.locator and trans.locator.bounds else None
+                }
+            })
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'pages': pages,
+                'transitions': transitions,
+                'page_count': len(pages),
+                'transition_count': len(transitions)
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/explore/v3/save', methods=['POST'])
+def explore_v3_save():
+    """保存 v3 导航图"""
+    global explorer_instance, exploration_result
+
+    if not explorer_instance:
+        return jsonify({'success': False, 'message': '没有探索结果'}), 400
+
+    if not hasattr(explorer_instance, 'save'):
+        return jsonify({'success': False, 'message': '当前不是 v3 探索器'}), 400
+
+    data = request.json or {}
+    filepath = data.get('filepath')
+
+    try:
+        explorer_instance.save(filepath)
+
+        return jsonify({
+            'success': True,
+            'message': f'导航图已保存',
+            'filepath': filepath
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/explore/v3/find_path', methods=['POST'])
+def explore_v3_find_path():
+    """查找路径"""
+    global explorer_instance
+
+    if not explorer_instance:
+        return jsonify({'success': False, 'message': '没有探索结果'}), 400
+
+    if not hasattr(explorer_instance, 'find_path'):
+        return jsonify({'success': False, 'message': '当前不是 v3 探索器'}), 400
+
+    data = request.json
+    from_page = data.get('from_page', '')
+    to_page = data.get('to_page', '')
+
+    if not from_page or not to_page:
+        return jsonify({'success': False, 'message': '请指定起始和目标页面'}), 400
+
+    try:
+        path = explorer_instance.find_path(from_page, to_page)
+
+        if path is None:
+            return jsonify({
+                'success': False,
+                'message': f'无法找到从 {from_page} 到 {to_page} 的路径'
+            })
+
+        # 序列化路径
+        path_data = []
+        for trans in path:
+            path_data.append({
+                'from_page': trans.from_page,
+                'to_page': trans.to_page,
+                'anchor_id': trans.anchor_id
+            })
+
+        return jsonify({
+            'success': True,
+            'message': f'找到路径: {len(path)} 步',
+            'data': {
+                'path': path_data,
+                'steps': len(path)
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/explore/v3/navigate', methods=['POST'])
+def explore_v3_navigate():
+    """执行导航"""
+    global explorer_instance
+
+    if not explorer_instance:
+        return jsonify({'success': False, 'message': '没有探索结果'}), 400
+
+    if not hasattr(explorer_instance, 'navigate_to'):
+        return jsonify({'success': False, 'message': '当前不是 v3 探索器'}), 400
+
+    data = request.json
+    target_page = data.get('target_page', '')
+    verify = data.get('verify', True)
+
+    if not target_page:
+        return jsonify({'success': False, 'message': '请指定目标页面'}), 400
+
+    try:
+        success, message = explorer_instance.navigate_to(target_page, verify=verify)
+
+        return jsonify({
+            'success': success,
+            'message': message
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+# =============================================================================
+# Auto Map Builder SoM (Set-of-Mark) API
+# =============================================================================
+
+@app.route('/api/explore/som/start', methods=['POST'])
+def explore_som_start():
+    """启动 SoM 探索（推荐）"""
+    global client, explorer_instance, exploration_result, exploration_status
+
+    if not client:
+        return jsonify({'success': False, 'message': '未连接设备'}), 400
+
+    if exploration_status['running']:
+        return jsonify({'success': False, 'message': '探索正在进行中'}), 400
+
+    if not VLM_AVAILABLE:
+        return jsonify({'success': False, 'message': 'Auto Map Builder 模块不可用'}), 400
+
+    data = request.json
+    package_name = data.get('package', '')
+
+    if not package_name:
+        return jsonify({'success': False, 'message': '请指定应用包名'}), 400
+
+    try:
+        from datetime import datetime
+
+        # 创建配置
+        config = ExplorationConfig(
+            max_pages=data.get('max_pages', 30),
+            max_depth=data.get('max_depth', 5),
+            max_time_seconds=data.get('max_time_seconds', 1800),
+            action_delay_ms=data.get('action_delay_ms', 800),
+            output_dir=data.get('output_dir', './maps')
+        )
+
+        # 日志回调
+        def log_callback(level, message, log_data=None):
+            log_entry = {
+                'time': datetime.now().strftime('%H:%M:%S'),
+                'level': level,
+                'message': message,
+                'data': log_data
+            }
+            exploration_status['logs'].append(log_entry)
+
+        # 清空日志
+        exploration_status['logs'] = []
+
+        # 创建 SoM 探索器
+        explorer_instance = SoMMapBuilder(client, config, log_callback)
+
+        # 更新状态
+        exploration_status['running'] = True
+        exploration_status['package'] = package_name
+        exploration_status['version'] = 'som'
+        exploration_status['progress'] = {
+            'pages_discovered': 0,
+            'transitions_discovered': 0,
+            'current_page': None
+        }
+        exploration_status['result'] = None
+
+        log_callback('info', f'[SoM] 开始探索: {package_name}')
+
+        # 执行探索
+        exploration_result = explorer_instance.explore(package_name)
+
+        # 更新结果
+        exploration_status['running'] = False
+        exploration_status['progress'] = {
+            'pages_discovered': len(exploration_result.graph.pages),
+            'transitions_discovered': len(exploration_result.graph.transitions),
+            'current_page': 'completed'
+        }
+        exploration_status['result'] = {
+            'pages': len(exploration_result.graph.pages),
+            'transitions': len(exploration_result.graph.transitions),
+            'time': round(exploration_result.exploration_time_seconds, 2),
+            'vlm_inferences': exploration_result.vlm_inference_count,
+            'vlm_time_ms': round(exploration_result.vlm_total_time_ms, 2),
+            'actions': exploration_result.total_actions
+        }
+
+        return jsonify({
+            'success': True,
+            'message': f'[SoM] 探索完成: {len(exploration_result.graph.pages)} 个页面, {len(exploration_result.graph.transitions)} 个跳转',
+            'result': exploration_status['result']
+        })
+
+    except Exception as e:
+        import traceback
+        exploration_status['running'] = False
+        return jsonify({
+            'success': False,
+            'message': f'探索失败: {str(e)}',
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/explore/coord/start', methods=['POST'])
+def explore_coord_start():
+    """启动坐标驱动探索 (v4 推荐)"""
+    global client, explorer_instance, exploration_result, exploration_status
+
+    if not client:
+        return jsonify({'success': False, 'message': '未连接设备'}), 400
+
+    if exploration_status['running']:
+        return jsonify({'success': False, 'message': '探索正在进行中'}), 400
+
+    if not VLM_AVAILABLE:
+        return jsonify({'success': False, 'message': 'Auto Map Builder 模块不可用'}), 400
+
+    data = request.json
+    package_name = data.get('package', '')
+
+    if not package_name:
+        return jsonify({'success': False, 'message': '请指定应用包名'}), 400
+
+    try:
+        from datetime import datetime
+
+        config = ExplorationConfig(
+            max_pages=data.get('max_pages', 30),
+            max_depth=data.get('max_depth', 5),
+            max_time_seconds=data.get('max_time_seconds', 1800),
+            action_delay_ms=data.get('action_delay_ms', 800),
+            output_dir=data.get('output_dir', './maps')
+        )
+
+        def log_callback(level, message, log_data=None):
+            log_entry = {
+                'time': datetime.now().strftime('%H:%M:%S'),
+                'level': level,
+                'message': message,
+                'data': log_data
+            }
+            exploration_status['logs'].append(log_entry)
+
+        exploration_status['logs'] = []
+        explorer_instance = CoordMapBuilder(client, config, log_callback)
+
+        exploration_status['running'] = True
+        exploration_status['package'] = package_name
+        exploration_status['version'] = 'coord'
+        exploration_status['progress'] = {
+            'pages_discovered': 0,
+            'transitions_discovered': 0,
+            'current_page': None
+        }
+        exploration_status['result'] = None
+
+        log_callback('info', f'[v4] 坐标驱动探索: {package_name}')
+
+        exploration_result = explorer_instance.explore(package_name)
+
+        exploration_status['running'] = False
+        exploration_status['progress'] = {
+            'pages_discovered': exploration_result['page_count'],
+            'transitions_discovered': exploration_result['transition_count'],
+            'current_page': 'completed'
+        }
+        exploration_status['result'] = {
+            'pages': exploration_result['page_count'],
+            'transitions': exploration_result['transition_count'],
+            'time': round(exploration_result['exploration_time_seconds'], 2),
+            'actions': exploration_result['total_actions']
+        }
+
+        return jsonify({
+            'success': True,
+            'message': f'[v4] 探索完成: {exploration_result["page_count"]} 页面, {exploration_result["transition_count"]} 跳转',
+            'result': exploration_status['result']
+        })
+
+    except Exception as e:
+        import traceback
+        exploration_status['running'] = False
+        return jsonify({
+            'success': False,
+            'message': f'探索失败: {str(e)}',
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/explore/node/start', methods=['POST'])
+def explore_node_start():
+    """启动 Node 驱动探索 (v5 推荐)"""
+    global client, explorer_instance, exploration_result, exploration_status
+
+    if not client:
+        return jsonify({'success': False, 'message': '未连接设备'}), 400
+
+    if exploration_status['running']:
+        return jsonify({'success': False, 'message': '探索正在进行中'}), 400
+
+    if not VLM_AVAILABLE:
+        return jsonify({'success': False, 'message': 'Auto Map Builder 模块不可用'}), 400
+
+    data = request.json
+    package_name = data.get('package', '')
+
+    if not package_name:
+        return jsonify({'success': False, 'message': '请指定应用包名'}), 400
+
+    try:
+        from datetime import datetime
+        from src.auto_map_builder import NodeMapBuilder
+
+        config = ExplorationConfig(
+            max_pages=data.get('max_pages', 30),
+            max_depth=data.get('max_depth', 3),
+            max_time_seconds=data.get('max_time_seconds', 1800),
+            action_delay_ms=data.get('action_delay_ms', 800),
+            output_dir=data.get('output_dir', './maps')
+        )
+
+        def log_callback(level, message, log_data=None):
+            log_entry = {
+                'time': datetime.now().strftime('%H:%M:%S'),
+                'level': level,
+                'message': message,
+                'data': log_data
+            }
+            exploration_status['logs'].append(log_entry)
+
+        exploration_status['logs'] = []
+        explorer_instance = NodeMapBuilder(client, config, log_callback)
+
+        exploration_status['running'] = True
+        exploration_status['package'] = package_name
+        exploration_status['version'] = 'node'
+        exploration_status['progress'] = {
+            'nodes_discovered': 0,
+            'nodes_explored': 0,
+            'current_node': None
+        }
+        exploration_status['result'] = None
+
+        log_callback('info', f'[v5] Node 驱动探索: {package_name}')
+
+        exploration_result = explorer_instance.explore(package_name)
+
+        exploration_status['running'] = False
+        exploration_status['progress'] = {
+            'nodes_discovered': exploration_result['total_nodes'],
+            'nodes_explored': exploration_result['explored_nodes'],
+            'current_node': 'completed'
+        }
+        exploration_status['result'] = {
+            'total_nodes': exploration_result['total_nodes'],
+            'explored_nodes': exploration_result['explored_nodes'],
+            'time': round(exploration_result['exploration_time_seconds'], 2),
+            'actions': exploration_result['total_actions']
+        }
+
+        return jsonify({
+            'success': True,
+            'message': f'[v5] 探索完成: {exploration_result["explored_nodes"]}/{exploration_result["total_nodes"]} 节点',
+            'result': exploration_status['result']
+        })
+
+    except Exception as e:
+        import traceback
+        exploration_status['running'] = False
+        return jsonify({
+            'success': False,
+            'message': f'探索失败: {str(e)}',
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/debug/som_annotate', methods=['POST'])
+def debug_som_annotate():
+    """调试：获取 SoM 标注截图"""
+    global client
+
+    if not client:
+        return jsonify({'success': False, 'message': '未连接设备'}), 400
+
+    if not VLM_AVAILABLE:
+        return jsonify({'success': False, 'message': 'VLM 模块不可用'}), 400
+
+    try:
+        import time
+
+        # 获取屏幕尺寸
+        success, width, height, _ = client.get_screen_size()
+        if not success:
+            width, height = 1080, 2400
+
+        # 获取截图
+        screenshot = client.request_screenshot()
+        if not screenshot:
+            return jsonify({'success': False, 'message': '截图失败'}), 400
+
+        # 获取 XML 节点
+        actions = client.dump_actions()
+        xml_nodes = actions.get('nodes', [])
+
+        # 创建标注截图
+        start = time.time()
+        annotated, nodes, description = create_annotated_screenshot(
+            screenshot, xml_nodes, width, height
+        )
+        elapsed = (time.time() - start) * 1000
+
+        # 返回结果
+        return jsonify({
+            'success': True,
+            'message': f'标注完成: {len(nodes)} 个节点',
+            'response': {
+                'node_count': len(nodes),
+                'original_count': len(xml_nodes),
+                'annotate_time_ms': round(elapsed, 2),
+                'annotated_image': base64.b64encode(annotated).decode(),
+                'original_image': base64.b64encode(screenshot).decode(),
+                'node_description': description,
+                'nodes': [
+                    {
+                        'index': n.index,
+                        'bounds': list(n.bounds),
+                        'center': list(n.center),
+                        'text': n.text,
+                        'resource_id': n.resource_id,
+                        'node_type': n.node_type
+                    }
+                    for n in nodes
+                ]
+            }
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/explore/screenshot/<path:filename>', methods=['GET'])
+def explore_screenshot(filename):
+    """获取探索过程中保存的截图"""
+    import os
+
+    # 安全检查：只允许访问 maps 目录下的文件
+    base_dir = os.path.abspath('./maps')
+    file_path = os.path.abspath(os.path.join(base_dir, filename))
+
+    if not file_path.startswith(base_dir):
+        return jsonify({'success': False, 'message': '非法路径'}), 403
+
+    if not os.path.exists(file_path):
+        return jsonify({'success': False, 'message': '文件不存在'}), 404
+
+    return Response(
+        open(file_path, 'rb').read(),
+        mimetype='image/jpeg'
+    )
 
 
 @app.route('/api/explore/result/overview', methods=['GET'])
