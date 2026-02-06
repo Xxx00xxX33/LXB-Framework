@@ -18,6 +18,7 @@ import time
 import base64
 import hashlib
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Set, Callable
@@ -32,6 +33,12 @@ except ImportError:
 
 from .vlm_engine import VLMEngine
 from .models import ExplorationConfig
+
+
+class ExplorationMode(Enum):
+    """探索模式"""
+    SERIAL = "serial"      # 串行：等待 VLM 返回再继续
+    PARALLEL = "parallel"  # 并行：VLM 后台推理，继续探索下一个
 
 
 class ExplorationStatus(Enum):
@@ -52,11 +59,23 @@ class NodeLocator:
     class_name: Optional[str] = None
     bounds: Optional[Tuple[int, int, int, int]] = None
 
+    def to_dict(self) -> dict:
+        """转换为精简字典（只保留有值的字段）"""
+        d = {}
+        if self.resource_id:
+            # 只保留 ID 部分
+            rid = self.resource_id.split("/")[-1] if "/" in self.resource_id else self.resource_id
+            d["resource_id"] = rid
+        if self.text:
+            d["text"] = self.text
+        if self.content_desc:
+            d["content_desc"] = self.content_desc
+        # bounds 和 class_name 不保存到 map（运行时查找）
+        return d
+
     def unique_key(self) -> str:
         """生成唯一标识"""
-        # 优先级：resource_id > text > content_desc > bounds
         if self.resource_id:
-            # 只取 ID 部分
             rid = self.resource_id.split("/")[-1] if "/" in self.resource_id else self.resource_id
             return f"id:{rid}"
         if self.text and len(self.text) <= 20:
@@ -73,20 +92,6 @@ class NodeLocator:
             return ((self.bounds[0] + self.bounds[2]) // 2,
                     (self.bounds[1] + self.bounds[3]) // 2)
         return None
-
-    def to_dict(self) -> dict:
-        d = {}
-        if self.resource_id:
-            d["resource_id"] = self.resource_id
-        if self.text:
-            d["text"] = self.text
-        if self.content_desc:
-            d["content_desc"] = self.content_desc
-        if self.class_name:
-            d["class_name"] = self.class_name
-        if self.bounds:
-            d["bounds"] = list(self.bounds)
-        return d
 
     @staticmethod
     def from_dict(d: dict) -> "NodeLocator":
@@ -108,29 +113,39 @@ class NodeLocator:
 
 
 @dataclass
-class NodeTransition:
-    """节点跳转记录"""
-    node_key: str                           # 节点唯一标识
-    locator: NodeLocator                    # 节点定位器
-    path: List[NodeLocator]                 # 从首页到达的路径
-    description: str                        # 节点描述（VLM 生成）
-    role: str = "other"                     # 角色：bottom_tab, top_tab, back, search, menu, other
-    target_description: str = ""            # 目的地页面描述
-    target_nodes: List["NavNode"] = field(default_factory=list)  # 目的地的导航节点
-    explored: bool = False                  # 是否已探索
-    explore_time: float = 0.0               # 探索时间
+class PageInfo:
+    """页面信息"""
+    page_id: str                    # 页面ID（如 home, search, profile）
+    name: str                       # 页面名称（如 首页, 搜索页）
+    description: str                # 功能描述
+    features: List[str] = field(default_factory=list)  # 页面内功能列表
 
     def to_dict(self) -> dict:
         return {
-            "node_key": self.node_key,
-            "locator": self.locator.to_dict(),
-            "path": [p.to_dict() for p in self.path],
+            "name": self.name,
             "description": self.description,
-            "role": self.role,
-            "target_description": self.target_description,
-            "target_nodes": [n.to_dict() for n in self.target_nodes],
-            "explored": self.explored,
-            "explore_time": self.explore_time
+            "features": self.features
+        }
+
+
+@dataclass
+class Transition:
+    """页面跳转"""
+    from_page: str                  # 源页面ID
+    to_page: str                    # 目标页面ID
+    node_name: str                  # 节点名称（如 "搜索"）
+    node_type: str                  # 节点类型（tab, jump, back, input）
+    locator: NodeLocator            # 定位器
+
+    def to_dict(self) -> dict:
+        return {
+            "from": self.from_page,
+            "to": self.to_page,
+            "action": {
+                "type": "tap",
+                "locator": self.locator.to_dict()
+            },
+            "description": f"点击{self.node_name}"
         }
 
 
@@ -138,72 +153,99 @@ class NodeTransition:
 class NavNode:
     """导航节点 - VLM 识别的可点击元素"""
     locator: NodeLocator
-    description: str  # VLM 描述
-    role: str = "other"  # bottom_tab, top_tab, back, search, menu, other
+    name: str                       # 节点名称
+    node_type: str = "jump"         # tab, jump, back, input
+    target_page: str = ""           # 目标页面ID
 
     def to_dict(self) -> dict:
         return {
             "locator": self.locator.to_dict(),
-            "description": self.description,
-            "role": self.role
+            "name": self.name,
+            "type": self.node_type,
+            "target_page": self.target_page
         }
 
     @staticmethod
     def from_dict(d: dict) -> "NavNode":
         return NavNode(
             locator=NodeLocator.from_dict(d["locator"]),
-            description=d.get("description", ""),
-            role=d.get("role", "other")
+            name=d.get("name", ""),
+            node_type=d.get("type", "jump"),
+            target_page=d.get("target_page", "")
         )
 
 
 @dataclass
 class ExploreTask:
     """探索任务"""
-    locator: NodeLocator        # 要点击的节点
-    path: List[NodeLocator]     # 从首页到达的路径
-    description: str            # 节点描述
-    depth: int = 0              # 深度
-    role: str = "other"         # 角色
+    locator: NodeLocator
+    path: List[NodeLocator]
+    name: str                       # 节点名称
+    node_type: str = "jump"
+    target_page: str = ""           # 预期目标页面
+    from_page: str = ""             # 来源页面
+    depth: int = 0
+
+
+@dataclass
+class PendingVLMTask:
+    """等待 VLM 返回的任务"""
+    node_key: str
+    screenshot: bytes
+    xml_nodes: List[Dict]
+    path: List[NodeLocator]
+    depth: int
+    from_page: str = ""             # 来源页面
+    node_name: str = ""             # 节点名称
+    node_type: str = ""             # 节点类型
+    expected_target: str = ""       # 预期目标页面
+    future: Optional[object] = None
 
 
 class NavigationMap:
     """
-    导航地图 - 以 Node 为中心
+    导航地图 - 精简结构
 
-    记录每个节点点击后去哪，不关心"页面"概念
+    用于路径规划和指令生成
     """
 
     def __init__(self):
-        self.transitions: Dict[str, NodeTransition] = {}  # node_key → transition
-        self.home_description: str = ""  # 首页描述
+        self.package: str = ""
+        self.pages: Dict[str, PageInfo] = {}          # page_id → PageInfo
+        self.transitions: List[Transition] = []       # 跳转列表
+        self._explored_edges: Set[Tuple[str, str]] = set()  # 已探索的边 (from, to)
 
-    def add_transition(self, transition: NodeTransition):
-        """添加跳转记录"""
-        self.transitions[transition.node_key] = transition
+    def add_page(self, page: PageInfo):
+        """添加页面"""
+        if page.page_id not in self.pages:
+            self.pages[page.page_id] = page
 
-    def get_transition(self, node_key: str) -> Optional[NodeTransition]:
-        """获取跳转记录"""
-        return self.transitions.get(node_key)
+    def add_transition(self, trans: Transition):
+        """添加跳转（去重）"""
+        edge = (trans.from_page, trans.to_page)
+        if edge not in self._explored_edges:
+            self._explored_edges.add(edge)
+            self.transitions.append(trans)
 
-    def is_explored(self, node_key: str) -> bool:
-        """检查节点是否已探索"""
-        trans = self.transitions.get(node_key)
-        return trans is not None and trans.explored
+    def get_page(self, page_id: str) -> Optional[PageInfo]:
+        return self.pages.get(page_id)
+
+    def get_transitions_from(self, page_id: str) -> List[Transition]:
+        """获取从某页面出发的所有跳转"""
+        return [t for t in self.transitions if t.from_page == page_id]
 
     def get_stats(self) -> dict:
-        """获取统计信息"""
-        explored = sum(1 for t in self.transitions.values() if t.explored)
         return {
-            "total_nodes": len(self.transitions),
-            "explored_nodes": explored,
-            "pending_nodes": len(self.transitions) - explored
+            "total_pages": len(self.pages),
+            "total_transitions": len(self.transitions),
+            "explored_nodes": len(self._explored_edges)
         }
 
     def to_dict(self) -> dict:
         return {
-            "home_description": self.home_description,
-            "transitions": {k: v.to_dict() for k, v in self.transitions.items()}
+            "package": self.package,
+            "pages": {pid: p.to_dict() for pid, p in self.pages.items()},
+            "transitions": [t.to_dict() for t in self.transitions]
         }
 
     def save(self, filepath: str):
@@ -230,45 +272,39 @@ class NodeExplorer:
 **屏幕分辨率: {width} x {height} 像素**
 
 ## 任务
-1. 描述页面功能定位
-2. 列出页面内的功能（自然语言）
+1. 识别当前页面类型，给出页面ID
+2. 描述页面功能
 3. 找出**页面跳转入口**和**输入框**
 
 ## 输出格式
 ```
-PAGE|{{"type":"页面类型","purpose":"核心功能","features":"页面内有什么功能"}}
-NAV|x|y|名称|类型
+PAGE|页面ID|页面名称|功能描述|页面内功能列表
+NAV|x|y|节点名称|类型|目标页面ID
 ```
 
-## 页面类型
-首页/列表页/详情页/个人中心/设置页/搜索页/登录页/其他
+## 页面ID规则
+用小写英文，如：home, search, profile, settings, detail, list, login, chat, cart
 
-## NAV 类型（只识别这4种）
-- `tab`: 底部/顶部导航Tab（切换App主要模块）
-- `jump`: 跳转入口（点击后进入新页面，如：搜索、设置、个人主页）
+## NAV 类型
+- `tab`: 底部/顶部导航Tab
+- `jump`: 跳转入口（搜索、设置等）
 - `back`: 返回按钮
-- `input`: 输入框/搜索框
+- `input`: 输入框
 
-## 严格排除（不要输出NAV）
-- 页面内操作按钮（排序、筛选、收藏、分享、点赞）
-- 列表项、卡片、商品
-- 活动、广告、运营入口
-- 不会跳转到新页面的任何按钮
-
-**判断标准：点击后会跳转到一个完全不同的页面吗？**
-- 是 → 输出 NAV
-- 否 → 写在 features 里
+## 严格排除
+- 页面内操作（排序、筛选、收藏、分享）
+- 列表项、卡片、商品、广告
 
 ## 示例
 ```
-PAGE|{{"type":"首页","purpose":"浏览推荐内容","features":"下拉刷新、内容卡片、排序筛选"}}
-NAV|{ex1_x}|{ex1_y}|首页|tab
-NAV|{ex2_x}|{ex2_y}|消息|tab
-NAV|{ex3_x}|{ex3_y}|我的|tab
-NAV|540|80|搜索|jump
+PAGE|home|首页|浏览推荐内容|下拉刷新,内容卡片,排序筛选
+NAV|{ex1_x}|{ex1_y}|首页|tab|home
+NAV|{ex2_x}|{ex2_y}|消息|tab|message
+NAV|{ex3_x}|{ex3_y}|我的|tab|profile
+NAV|540|80|搜索|jump|search
 ```
 
-现在分析（只输出会跳转页面的入口）：'''
+现在分析：'''
 
     def __init__(
         self,
@@ -287,6 +323,13 @@ NAV|540|80|搜索|jump
         self.nav_map = NavigationMap()
         self.pending_tasks: deque = deque()
         self.explored_keys: Set[str] = set()
+
+        # 并行模式相关
+        self._explore_mode = ExplorationMode.SERIAL
+        self._vlm_executor: Optional[ThreadPoolExecutor] = None
+        self._pending_vlm_tasks: List[PendingVLMTask] = []
+        self._vlm_tasks_lock = threading.Lock()
+        self._click_delay = 1.5  # 点击后等待时间（秒），让页面稳定
 
         self._status = ExplorationStatus.IDLE
         self._status_lock = threading.Lock()
@@ -333,6 +376,20 @@ NAV|540|80|搜索|jump
             self.status = ExplorationStatus.STOPPING
             self._pause_event.set()
 
+    def set_mode(self, mode: str):
+        """设置探索模式: 'serial' 或 'parallel'"""
+        if mode == "parallel":
+            self._explore_mode = ExplorationMode.PARALLEL
+            self.log("info", "切换到并行探索模式")
+        else:
+            self._explore_mode = ExplorationMode.SERIAL
+            self.log("info", "切换到串行探索模式")
+
+    def set_click_delay(self, delay: float):
+        """设置点击后等待时间（秒）"""
+        self._click_delay = max(0.5, min(5.0, delay))
+        self.log("info", f"点击延迟设置为 {self._click_delay}s")
+
     def _check_control(self) -> bool:
         if self._status == ExplorationStatus.STOPPING:
             return False
@@ -344,72 +401,72 @@ NAV|540|80|搜索|jump
         with self._realtime_lock:
             state = self._realtime.copy()
             state["status"] = self._status.value
+            state["mode"] = self._explore_mode.value
             stats = self.nav_map.get_stats()
+
+            # 并行模式：统计后台 VLM 任务数
+            pending_vlm = 0
+            with self._vlm_tasks_lock:
+                pending_vlm = len(self._pending_vlm_tasks)
+
             state["stats"] = {
                 **stats,
                 "total_actions": self._stats["total_actions"],
                 "queue_size": len(self.pending_tasks),
+                "pending_vlm": pending_vlm,
                 "elapsed": time.time() - self._stats["start_time"] if self._stats["start_time"] else 0
             }
 
-            # 构建拓扑图数据（兼容前端）
+            # 构建拓扑图数据
             graph_nodes = []
             edges = []
-            seen_targets = set()
 
-            # 首页作为根节点
-            if self.nav_map.home_description:
+            # 页面作为节点
+            for page_id, page in self.nav_map.pages.items():
                 graph_nodes.append({
-                    "id": "home",
-                    "type": "首页",
-                    "desc": self.nav_map.home_description[:50]
+                    "id": page_id,
+                    "type": page.name,
+                    "desc": page.description[:50]
                 })
 
-            # 遍历所有已探索的节点
-            for node_key, trans in self.nav_map.transitions.items():
-                if trans.explored and trans.target_description:
-                    # 目标页面作为节点
-                    target_id = trans.target_description[:30]
-                    if target_id not in seen_targets:
-                        seen_targets.add(target_id)
-                        graph_nodes.append({
-                            "id": target_id,
-                            "type": "页面",
-                            "desc": trans.target_description[:50]
-                        })
-
-                    # 边：从首页/上级页面 → 目标页面
-                    from_id = "home" if not trans.path else trans.path[-1].unique_key()[:30]
-                    edges.append({
-                        "from": from_id,
-                        "to": target_id,
-                        "label": trans.description[:20]
-                    })
+            # 跳转作为边
+            for trans in self.nav_map.transitions:
+                edges.append({
+                    "from": trans.from_page,
+                    "to": trans.to_page,
+                    "label": trans.node_name
+                })
 
             state["graph"] = {
                 "nodes": graph_nodes,
                 "edges": edges
             }
 
-            # Node 列表（显示所有节点及其探索状态）
+            # Node 列表（显示待探索的任务）
             node_list = []
-            for node_key, trans in self.nav_map.transitions.items():
+            for task in list(self.pending_tasks)[:20]:  # 只显示前20个
                 node_list.append({
-                    "node_key": node_key,
-                    "description": trans.description,
-                    "explored": trans.explored,
-                    "target_description": trans.target_description[:50] if trans.target_description else "",
-                    "depth": len(trans.path),
-                    "role": trans.role,
-                    "locator": {
-                        "resource_id": trans.locator.resource_id,
-                        "text": trans.locator.text,
-                        "bounds": trans.locator.bounds
-                    } if trans.locator else None
+                    "node_key": task.locator.unique_key(),
+                    "name": task.name,
+                    "explored": False,
+                    "from_page": task.from_page,
+                    "target_page": task.target_page,
+                    "depth": task.depth,
+                    "type": task.node_type
                 })
 
-            # 按探索状态排序：未探索的在前
-            node_list.sort(key=lambda x: (x["explored"], x["depth"]))
+            # 已探索的跳转
+            for trans in self.nav_map.transitions[-10:]:  # 最近10个
+                node_list.append({
+                    "node_key": f"{trans.from_page}→{trans.to_page}",
+                    "name": trans.node_name,
+                    "explored": True,
+                    "from_page": trans.from_page,
+                    "target_page": trans.to_page,
+                    "depth": 0,
+                    "type": trans.node_type
+                })
+
             state["node_list"] = node_list
 
             return state
@@ -579,18 +636,25 @@ NAV|540|80|搜索|jump
                 ex3_y=int(h * 0.06)
             )
 
+            self.log("info", f"VLM 请求中 ({w}x{h}, {len(screenshot)} bytes)...")
+
             # 检查是否启用并发推理
             if self.vlm.config.concurrent_enabled:
                 return self._analyze_page_concurrent(screenshot, prompt)
             else:
                 response = self.vlm._call_api(screenshot, prompt)
-                self.log("debug", f"VLM 响应:\n{response[:500]}")
-                return self._parse_response(response)
+                self.log("info", f"VLM 响应 ({len(response)} 字符)")
+                self.log("debug", f"VLM 原始响应:\n{response[:800]}")
+                desc, nodes = self._parse_response(response)
+                self.log("info", f"解析结果: desc={desc[:50] if desc else 'None'}, nodes={len(nodes)}")
+                return desc, nodes
         except Exception as e:
+            import traceback
             self.log("error", f"VLM 分析失败: {e}")
-            return "", []
+            self.log("error", traceback.format_exc())
+            return None, []
 
-    def _analyze_page_concurrent(self, screenshot: bytes, prompt: str) -> Tuple[str, List[NavNode]]:
+    def _analyze_page_concurrent(self, screenshot: bytes, prompt: str) -> Tuple[Optional[PageInfo], List[NavNode]]:
         """
         并发推理分析页面
 
@@ -610,9 +674,9 @@ NAV|540|80|搜索|jump
         def single_call(idx: int):
             try:
                 response = self.vlm._call_api(screenshot, prompt)
-                desc, nodes = self._parse_response(response)
+                page_info, nodes = self._parse_response(response)
                 with lock:
-                    results.append((desc, nodes))
+                    results.append((page_info, nodes))
                 return True
             except Exception as e:
                 self.log("debug", f"  并发推理 #{idx+1} 失败: {e}")
@@ -625,14 +689,14 @@ NAV|540|80|搜索|jump
                 future.result()
 
         if not results:
-            return "", []
+            return None, []
 
-        # 聚合描述（取最常见的）
-        descriptions = [r[0] for r in results if r[0]]
-        if descriptions:
-            final_desc = max(set(descriptions), key=descriptions.count)
-        else:
-            final_desc = ""
+        # 聚合页面信息（取第一个有效的）
+        final_page = None
+        for page_info, _ in results:
+            if page_info:
+                final_page = page_info
+                break
 
         # 聚合导航节点（按坐标分组，出现次数 >= threshold 的保留）
         all_nodes = []
@@ -643,7 +707,7 @@ NAV|540|80|搜索|jump
 
         self.log("info", f"  并发结果: {len(results)}/{num_requests} 成功, 聚合 {len(aggregated_nodes)} 个节点")
 
-        return final_desc, aggregated_nodes
+        return final_page, aggregated_nodes
 
     def _aggregate_nav_nodes(self, nodes: List[NavNode], threshold: int) -> List[NavNode]:
         """
@@ -691,25 +755,30 @@ NAV|540|80|搜索|jump
             avg_x = sum(n.locator.bounds[0] for n in group) // len(group)
             avg_y = sum(n.locator.bounds[1] for n in group) // len(group)
 
-            # 取最常见的描述
-            descriptions = [n.description for n in group]
-            most_common_desc = max(set(descriptions), key=descriptions.count)
+            # 取最常见的名称
+            names = [n.name for n in group]
+            most_common_name = max(set(names), key=names.count)
 
-            # 取最常见的角色
-            roles = [n.role for n in group]
-            most_common_role = max(set(roles), key=roles.count)
+            # 取最常见的类型
+            types = [n.node_type for n in group]
+            most_common_type = max(set(types), key=types.count)
+
+            # 取最常见的目标页面
+            targets = [n.target_page for n in group if n.target_page]
+            most_common_target = max(set(targets), key=targets.count) if targets else ""
 
             aggregated.append(NavNode(
                 locator=NodeLocator(bounds=(avg_x, avg_y, avg_x, avg_y)),
-                description=most_common_desc,
-                role=most_common_role
+                name=most_common_name,
+                node_type=most_common_type,
+                target_page=most_common_target
             ))
 
         return aggregated
 
-    def _parse_response(self, response: str) -> Tuple[str, List[NavNode]]:
-        """解析 VLM 响应"""
-        description = ""
+    def _parse_response(self, response: str) -> Tuple[Optional[PageInfo], List[NavNode]]:
+        """解析 VLM 响应，返回 (页面信息, 导航节点列表)"""
+        page_info = None
         nav_nodes = []
 
         for line in response.strip().split("\n"):
@@ -717,60 +786,45 @@ NAV|540|80|搜索|jump
             if not line or line.startswith("```"):
                 continue
 
-            # 新格式: PAGE|{"type":"...", "purpose":"...", "features":"..."}
+            # 新格式: PAGE|页面ID|页面名称|功能描述|功能列表
             if line.startswith("PAGE|"):
-                parts = line.split("|", 1)
-                if len(parts) >= 2:
-                    json_str = parts[1].strip()
-                    try:
-                        page_info = json.loads(json_str)
-                        # 格式化为简洁描述
-                        page_type = page_info.get("type", "未知")
-                        purpose = page_info.get("purpose", "")
-                        features = page_info.get("features", "")
-                        description = f"[{page_type}] {purpose}"
-                        if features:
-                            description += f" | 功能: {features}"
-                    except json.JSONDecodeError:
-                        # JSON 解析失败，直接用原文
-                        description = json_str
-
-            # 兼容旧格式: DESC|页面描述
-            elif line.startswith("DESC|"):
-                parts = line.split("|", 1)
-                if len(parts) >= 2:
-                    description = parts[1].strip()
-
-            elif line.startswith("NAV|"):
                 parts = line.split("|")
                 if len(parts) >= 4:
+                    page_id = parts[1].strip().lower()
+                    name = parts[2].strip()
+                    description = parts[3].strip()
+                    features = parts[4].strip().split(",") if len(parts) >= 5 else []
+                    features = [f.strip() for f in features if f.strip()]
+                    page_info = PageInfo(
+                        page_id=page_id,
+                        name=name,
+                        description=description,
+                        features=features
+                    )
+
+            # NAV|x|y|节点名称|类型|目标页面ID
+            elif line.startswith("NAV|"):
+                parts = line.split("|")
+                if len(parts) >= 5:
                     try:
                         x = int(parts[1].strip())
                         y = int(parts[2].strip())
-                        desc = parts[3].strip()
-                        nav_type = parts[4].strip() if len(parts) >= 5 else "other"
-
-                        # 映射新类型到旧角色（兼容）
-                        role_map = {
-                            "tab": "bottom_tab",
-                            "jump": "jump",
-                            "back": "back",
-                            "input": "input",
-                            # 兼容旧格式
-                            "bottom_tab": "bottom_tab",
-                            "top_tab": "top_tab",
-                            "search": "jump",
-                            "menu": "jump",
-                        }
-                        role = role_map.get(nav_type, "other")
+                        node_name = parts[3].strip()
+                        node_type = parts[4].strip().lower()
+                        target_page = parts[5].strip().lower() if len(parts) >= 6 else ""
 
                         # 创建 locator（暂时只有坐标，后面会匹配 XML）
                         locator = NodeLocator(bounds=(x, y, x, y))
-                        nav_nodes.append(NavNode(locator=locator, description=desc, role=role))
+                        nav_nodes.append(NavNode(
+                            locator=locator,
+                            name=node_name,
+                            node_type=node_type,
+                            target_page=target_page
+                        ))
                     except ValueError:
                         continue
 
-        return description, nav_nodes
+        return page_info, nav_nodes
 
     def _match_xml_node(self, vlm_x: int, vlm_y: int, vlm_desc: str, xml_nodes: List[Dict]) -> Optional[Dict]:
         """
@@ -895,8 +949,8 @@ NAV|540|80|搜索|jump
         # 先过滤掉垃圾功能
         filtered_nodes = []
         for nav in nav_nodes:
-            if self._is_junk_entry(nav.description):
-                self.log("debug", f"    ✗ 过滤垃圾功能: {nav.description}")
+            if self._is_junk_entry(nav.name):
+                self.log("debug", f"    ✗ 过滤垃圾功能: {nav.name}")
             else:
                 filtered_nodes.append(nav)
 
@@ -920,20 +974,142 @@ NAV|540|80|搜索|jump
                 continue
 
             # 匹配 XML 节点（优先文本匹配，其次坐标匹配）
-            xml_node = self._match_xml_node(vlm_x, vlm_y, nav.description, xml_nodes)
+            xml_node = self._match_xml_node(vlm_x, vlm_y, nav.name, xml_nodes)
             if xml_node:
                 xml_text = xml_node.get("text") or xml_node.get("content_desc") or ""
                 # 用 XML 信息更新 locator
                 nav.locator = self._create_locator_from_xml(xml_node)
                 new_center = nav.locator.click_point()
-                self.log("info", f"    ✓ VLM「{nav.description}」({vlm_x},{vlm_y}) → XML「{xml_text}」{new_center}")
+                self.log("info", f"    ✓ VLM「{nav.name}」({vlm_x},{vlm_y}) → XML「{xml_text}」{new_center}")
                 enriched.append(nav)
             else:
                 # 没匹配到，打印原因
-                self.log("debug", f"    ✗ {nav.description}: VLM({vlm_x},{vlm_y}) 未匹配到导航锚点")
+                self.log("debug", f"    ✗ {nav.name}: VLM({vlm_x},{vlm_y}) 未匹配到导航锚点")
 
         self.log("info", f"  匹配结果: {len(enriched)}/{len(nav_nodes)} 个节点")
         return enriched
+
+    # === 并行 VLM 推理 ===
+
+    def _submit_vlm_task(self, node_key: str, screenshot: bytes, xml_nodes: List[Dict],
+                         path: List[NodeLocator], depth: int,
+                         from_page: str = "", node_name: str = "",
+                         node_type: str = "", expected_target: str = ""):
+        """提交 VLM 推理任务到后台"""
+        if self._vlm_executor is None:
+            return
+
+        def vlm_work():
+            try:
+                page_info, nav_nodes = self._analyze_page(screenshot)
+                nav_nodes = self._enrich_nav_nodes(nav_nodes, xml_nodes)
+                return (page_info, nav_nodes)
+            except Exception as e:
+                self.log("error", f"VLM 后台推理失败: {e}")
+                return (None, [])
+
+        future = self._vlm_executor.submit(vlm_work)
+        task = PendingVLMTask(
+            node_key=node_key,
+            screenshot=screenshot,
+            xml_nodes=xml_nodes,
+            path=path,
+            depth=depth,
+            from_page=from_page,
+            node_name=node_name,
+            node_type=node_type,
+            expected_target=expected_target,
+            future=future
+        )
+
+        with self._vlm_tasks_lock:
+            self._pending_vlm_tasks.append(task)
+
+        self.log("debug", f"  VLM 任务已提交后台: {node_key}")
+
+    def _process_completed_vlm_tasks(self):
+        """处理已完成的 VLM 任务"""
+        completed = []
+
+        with self._vlm_tasks_lock:
+            remaining = []
+            for task in self._pending_vlm_tasks:
+                if task.future and task.future.done():
+                    completed.append(task)
+                else:
+                    remaining.append(task)
+            self._pending_vlm_tasks = remaining
+
+        for task in completed:
+            try:
+                result = task.future.result(timeout=0.1)
+                new_page, new_nav_nodes = result
+
+                # 确定目标页面ID
+                if new_page:
+                    target_page_id = new_page.page_id
+                    self.nav_map.add_page(new_page)
+                    self.log("info", f"  [VLM完成] {task.node_name} → {new_page.name} ({target_page_id})")
+                else:
+                    target_page_id = task.expected_target or "unknown"
+                    self.log("info", f"  [VLM完成] {task.node_name} → {target_page_id}")
+
+                self.log("info", f"    发现 {len(new_nav_nodes)} 个导航节点")
+
+                # 添加跳转记录
+                trans = Transition(
+                    from_page=task.from_page,
+                    to_page=target_page_id,
+                    node_name=task.node_name,
+                    node_type=task.node_type,
+                    locator=NodeLocator()  # 需要从 task 恢复
+                )
+                self.nav_map.add_transition(trans)
+
+                # 新节点加入队列
+                for nav in new_nav_nodes:
+                    new_key = nav.locator.unique_key()
+                    if new_key not in self.explored_keys:
+                        new_task = ExploreTask(
+                            locator=nav.locator,
+                            path=task.path,
+                            name=nav.name,
+                            node_type=nav.node_type,
+                            target_page=nav.target_page,
+                            from_page=target_page_id,
+                            depth=task.depth + 1
+                        )
+                        self.pending_tasks.append(new_task)
+
+                # 更新实时状态
+                with self._realtime_lock:
+                    self._realtime["current_screenshot"] = base64.b64encode(task.screenshot).decode()
+                    self._realtime["last_action"] = f"{task.node_name} → {target_page_id}"
+
+            except Exception as e:
+                self.log("error", f"处理 VLM 结果失败: {e}")
+
+        return len(completed)
+
+    def _wait_all_vlm_tasks(self):
+        """等待所有 VLM 任务完成"""
+        with self._vlm_tasks_lock:
+            pending_count = len(self._pending_vlm_tasks)
+
+        if pending_count == 0:
+            return
+
+        self.log("info", f"等待 {pending_count} 个 VLM 任务完成...")
+
+        while True:
+            with self._vlm_tasks_lock:
+                if not self._pending_vlm_tasks:
+                    break
+
+            self._process_completed_vlm_tasks()
+            time.sleep(0.5)
+
+        self.log("info", "所有 VLM 任务已完成")
 
     # === 可视化 ===
 
@@ -972,16 +1148,28 @@ NAV|540|80|搜索|jump
 
     def explore(self, package_name: str) -> dict:
         """执行探索"""
+        from concurrent.futures import ThreadPoolExecutor
+
         self.status = ExplorationStatus.RUNNING
         self._stats["start_time"] = time.time()
 
         self.log("info", "=" * 50)
-        self.log("info", f"[v5] Node 驱动探索: {package_name}")
+        mode_str = "并行" if self._explore_mode == ExplorationMode.PARALLEL else "串行"
+        self.log("info", f"[v5] Node 驱动探索 ({mode_str}模式): {package_name}")
         self.log("info", "=" * 50)
 
         self.nav_map = NavigationMap()
+        self.nav_map.package = package_name
         self.pending_tasks = deque()
         self.explored_keys = set()
+
+        # 并行模式：初始化线程池
+        if self._explore_mode == ExplorationMode.PARALLEL:
+            self._vlm_executor = ThreadPoolExecutor(max_workers=5)
+            self._pending_vlm_tasks = []
+            self.log("info", f"并行模式: 点击延迟 {self._click_delay}s, VLM 线程池 5")
+        else:
+            self._vlm_executor = None
 
         try:
             self._get_screen_size()
@@ -998,46 +1186,82 @@ NAV|540|80|搜索|jump
             self.log("info", "分析首页...")
             screenshot = self._screenshot()
             if not screenshot:
+                self.log("error", "首页截图失败")
                 self.status = ExplorationStatus.STOPPED
                 return self._build_result(package_name)
 
             xml_nodes = self._dump_actions()
-            home_desc, home_nav_nodes = self._analyze_page(screenshot)
+            self.log("info", f"XML 节点数: {len(xml_nodes)}")
+
+            self.log("info", "调用 VLM 分析...")
+            home_page, home_nav_nodes = self._analyze_page(screenshot)
+            if home_page:
+                self.log("info", f"VLM 返回: page={home_page.page_id}({home_page.name}), 原始节点={len(home_nav_nodes)}")
+            else:
+                self.log("warn", "VLM 未返回页面信息")
+                home_page = PageInfo(page_id="home", name="首页", description="应用首页", features=[])
+
+            # 打印原始节点
+            for nav in home_nav_nodes:
+                self.log("debug", f"  原始: {nav.name} [{nav.node_type}] → {nav.target_page} @ {nav.locator.bounds}")
 
             # 用 XML 丰富导航节点
             home_nav_nodes = self._enrich_nav_nodes(home_nav_nodes, xml_nodes)
 
-            self.nav_map.home_description = home_desc
-            self.log("info", f"首页: {home_desc}")
+            # 添加首页到 map
+            self.nav_map.add_page(home_page)
+            self.log("info", f"首页: {home_page.name} - {home_page.description}")
             self.log("info", f"导航节点: {len(home_nav_nodes)} 个")
 
+            if not home_nav_nodes:
+                self.log("warn", "首页未发现导航节点，探索结束")
+                self.status = ExplorationStatus.COMPLETED
+                return self._build_result(package_name)
+
             for nav in home_nav_nodes:
-                self.log("info", f"  - {nav.description} [{nav.role}] {nav.locator.unique_key()}")
+                self.log("info", f"  - {nav.name} [{nav.node_type}] → {nav.target_page}")
 
             # 首页节点加入队列
             for nav in home_nav_nodes:
                 task = ExploreTask(
                     locator=nav.locator,
                     path=[],
-                    description=nav.description,
-                    depth=0,
-                    role=nav.role
+                    name=nav.name,
+                    node_type=nav.node_type,
+                    target_page=nav.target_page,
+                    from_page=home_page.page_id,
+                    depth=0
                 )
                 self.pending_tasks.append(task)
 
-                # 预注册到 nav_map
-                trans = NodeTransition(
-                    node_key=nav.locator.unique_key(),
-                    locator=nav.locator,
-                    path=[],
-                    description=nav.description,
-                    role=nav.role
-                )
-                self.nav_map.add_transition(trans)
-
             # 主循环：探索每个节点
             task_count = 0
-            while self.pending_tasks:
+            while True:
+                # 并行模式：检查是否还有工作要做
+                if self._explore_mode == ExplorationMode.PARALLEL:
+                    # 处理已完成的 VLM 任务（可能会添加新节点到队列）
+                    completed = self._process_completed_vlm_tasks()
+                    if completed > 0:
+                        self.log("debug", f"  处理了 {completed} 个 VLM 结果")
+
+                    # 检查是否还有待处理的任务
+                    with self._vlm_tasks_lock:
+                        has_pending_vlm = len(self._pending_vlm_tasks) > 0
+
+                    # 如果队列空了但还有 VLM 任务在跑，等一下
+                    if not self.pending_tasks and has_pending_vlm:
+                        self.log("debug", "  队列空，等待 VLM 任务...")
+                        time.sleep(0.5)
+                        continue
+
+                    # 如果队列空了且没有 VLM 任务，结束
+                    if not self.pending_tasks and not has_pending_vlm:
+                        break
+                else:
+                    # 串行模式：队列空就结束
+                    if not self.pending_tasks:
+                        break
+
                 if not self._check_control():
                     break
 
@@ -1050,6 +1274,10 @@ NAV|540|80|搜索|jump
                     self.log("info", "达到时间限制")
                     break
 
+                # 队列可能在等待 VLM 时被填充，再检查一次
+                if not self.pending_tasks:
+                    continue
+
                 task = self.pending_tasks.popleft()
                 node_key = task.locator.unique_key()
 
@@ -1059,15 +1287,15 @@ NAV|540|80|搜索|jump
 
                 # 深度限制
                 if task.depth >= self.config.max_depth:
-                    self.log("debug", f"跳过深度超限: {task.description}")
+                    self.log("debug", f"跳过深度超限: {task.name}")
                     continue
 
                 task_count += 1
                 self.explored_keys.add(node_key)
 
                 self.log("info", "")
-                self.log("info", f"━━━ [{task_count}] {task.description} (深度{task.depth}) ━━━")
-                self.log("info", f"  路径: {' → '.join([p.unique_key()[:20] for p in task.path]) or '首页'}")
+                self.log("info", f"━━━ [{task_count}] {task.name} (深度{task.depth}) ━━━")
+                self.log("info", f"  {task.from_page} → {task.target_page}")
 
                 # 回到首页（优先用 Back，避免 launch 导致卡死）
                 self._go_home(package_name)
@@ -1090,74 +1318,93 @@ NAV|540|80|搜索|jump
                     continue
 
                 # 打印详细的点击信息
-                self.log("info", f"  点击 ({click_point[0]}, {click_point[1]}) - {task.description}")
-                if task.locator.bounds:
-                    self.log("debug", f"    bounds: {task.locator.bounds}")
-                if task.locator.resource_id:
-                    self.log("debug", f"    resource_id: {task.locator.resource_id}")
-                if task.locator.text:
-                    self.log("debug", f"    text: {task.locator.text}")
+                self.log("info", f"  点击 ({click_point[0]}, {click_point[1]}) - {task.name}")
 
                 # 截图并标记（点击前）
                 screenshot = self._screenshot()
                 if screenshot:
-                    marked = self._mark_point(screenshot, click_point[0], click_point[1], task.description)
+                    marked = self._mark_point(screenshot, click_point[0], click_point[1], task.name)
                     with self._realtime_lock:
                         self._realtime["current_screenshot"] = base64.b64encode(marked).decode()
-                        self._realtime["current_node"] = task.description
+                        self._realtime["current_node"] = task.name
 
                 # 执行点击
                 self._tap(*click_point)
 
-                # 等待页面响应（增加等待时间）
-                time.sleep(0.8)
+                # 等待页面响应（使用配置的延迟时间）
+                time.sleep(self._click_delay)
                 new_screenshot = self._screenshot()
                 if not new_screenshot:
                     continue
 
                 new_xml = self._dump_actions()
-                new_desc, new_nav_nodes = self._analyze_page(new_screenshot)
-                new_nav_nodes = self._enrich_nav_nodes(new_nav_nodes, new_xml)
-
-                self.log("info", f"  → {new_desc}")
-                self.log("info", f"    发现 {len(new_nav_nodes)} 个导航节点")
-
-                # 更新 transition
-                trans = self.nav_map.get_transition(node_key)
-                if trans:
-                    trans.target_description = new_desc
-                    trans.target_nodes = new_nav_nodes
-                    trans.explored = True
-                    trans.explore_time = time.time()
-
-                # 新节点加入队列
                 new_path = task.path + [task.locator]
-                for nav in new_nav_nodes:
-                    new_key = nav.locator.unique_key()
-                    if new_key not in self.explored_keys:
-                        new_task = ExploreTask(
-                            locator=nav.locator,
-                            path=new_path,
-                            description=nav.description,
-                            depth=task.depth + 1,
-                            role=nav.role
-                        )
-                        self.pending_tasks.append(new_task)
 
-                        # 预注册
-                        if not self.nav_map.get_transition(new_key):
-                            new_trans = NodeTransition(
-                                node_key=new_key,
+                # 根据模式处理 VLM 分析
+                if self._explore_mode == ExplorationMode.PARALLEL:
+                    # 并行模式：提交到后台，不等待
+                    self._submit_vlm_task(
+                        node_key, new_screenshot, new_xml, new_path, task.depth,
+                        from_page=task.from_page, node_name=task.name,
+                        node_type=task.node_type, expected_target=task.target_page
+                    )
+                    self.log("info", f"  VLM 分析已提交后台")
+
+                    # 更新实时截图
+                    with self._realtime_lock:
+                        self._realtime["current_screenshot"] = base64.b64encode(new_screenshot).decode()
+                        self._realtime["last_action"] = f"{task.name} → (分析中...)"
+                else:
+                    # 串行模式：等待 VLM 返回
+                    new_page, new_nav_nodes = self._analyze_page(new_screenshot)
+                    new_nav_nodes = self._enrich_nav_nodes(new_nav_nodes, new_xml)
+
+                    # 确定目标页面ID
+                    if new_page:
+                        target_page_id = new_page.page_id
+                        self.nav_map.add_page(new_page)
+                        self.log("info", f"  → {new_page.name} ({new_page.page_id})")
+                    else:
+                        target_page_id = task.target_page or "unknown"
+                        self.log("info", f"  → {target_page_id}")
+
+                    self.log("info", f"    发现 {len(new_nav_nodes)} 个导航节点")
+
+                    # 添加跳转记录
+                    trans = Transition(
+                        from_page=task.from_page,
+                        to_page=target_page_id,
+                        node_name=task.name,
+                        node_type=task.node_type,
+                        locator=task.locator
+                    )
+                    self.nav_map.add_transition(trans)
+
+                    # 新节点加入队列
+                    for nav in new_nav_nodes:
+                        new_key = nav.locator.unique_key()
+                        if new_key not in self.explored_keys:
+                            new_task = ExploreTask(
                                 locator=nav.locator,
                                 path=new_path,
-                                description=nav.description,
-                                role=nav.role
+                                name=nav.name,
+                                node_type=nav.node_type,
+                                target_page=nav.target_page,
+                                from_page=target_page_id,
+                                depth=task.depth + 1
                             )
-                            self.nav_map.add_transition(new_trans)
+                            self.pending_tasks.append(new_task)
 
-                with self._realtime_lock:
-                    self._realtime["current_screenshot"] = base64.b64encode(new_screenshot).decode()
-                    self._realtime["last_action"] = f"{task.description} → {new_desc}"
+                    with self._realtime_lock:
+                        self._realtime["current_screenshot"] = base64.b64encode(new_screenshot).decode()
+                        self._realtime["last_action"] = f"{task.name} → {target_page_id}"
+
+            # 并行模式：等待所有 VLM 任务完成
+            if self._explore_mode == ExplorationMode.PARALLEL:
+                self._wait_all_vlm_tasks()
+                if self._vlm_executor:
+                    self._vlm_executor.shutdown(wait=False)
+                    self._vlm_executor = None
 
             # 完成
             elapsed = time.time() - self._stats["start_time"]
@@ -1166,7 +1413,7 @@ NAV|540|80|搜索|jump
             self.log("info", "")
             self.log("info", "=" * 50)
             self.log("info", "探索完成!")
-            self.log("info", f"节点: {stats['total_nodes']}, 已探索: {stats['explored_nodes']}")
+            self.log("info", f"页面: {stats['total_pages']}, 跳转: {stats['total_transitions']}")
             self.log("info", f"动作: {self._stats['total_actions']}, 耗时: {elapsed:.1f}s")
             self.log("info", "=" * 50)
 
@@ -1176,7 +1423,7 @@ NAV|540|80|搜索|jump
         except Exception as e:
             import traceback
             self.log("error", f"探索异常: {e}")
-            self.log("debug", traceback.format_exc())
+            self.log("error", f"异常堆栈:\n{traceback.format_exc()}")
             self.status = ExplorationStatus.STOPPED
             return self._build_result(package_name)
 

@@ -60,6 +60,12 @@ def map_builder():
     return render_template('map_builder.html')
 
 
+@app.route('/map_viewer')
+def map_viewer():
+    """Map Viewer 页面"""
+    return render_template('map_viewer.html')
+
+
 @app.route('/api/connect', methods=['POST'])
 def connect():
     """连接到设备"""
@@ -1423,6 +1429,12 @@ def explore_node_start():
         exploration_status['logs'] = []
         explorer_instance = NodeMapBuilder(client, config, log_callback)
 
+        # 设置探索模式和点击延迟
+        explore_mode = data.get('explore_mode', 'serial')
+        click_delay = data.get('click_delay', 1.5)
+        explorer_instance.set_mode(explore_mode)
+        explorer_instance.set_click_delay(click_delay)
+
         exploration_status['running'] = True
         exploration_status['package'] = package_name
         exploration_status['version'] = 'node'
@@ -1439,20 +1451,20 @@ def explore_node_start():
 
         exploration_status['running'] = False
         exploration_status['progress'] = {
-            'nodes_discovered': exploration_result['total_nodes'],
-            'nodes_explored': exploration_result['explored_nodes'],
+            'pages_discovered': exploration_result['total_pages'],
+            'transitions_discovered': exploration_result['total_transitions'],
             'current_node': 'completed'
         }
         exploration_status['result'] = {
-            'total_nodes': exploration_result['total_nodes'],
-            'explored_nodes': exploration_result['explored_nodes'],
+            'total_pages': exploration_result['total_pages'],
+            'total_transitions': exploration_result['total_transitions'],
             'time': round(exploration_result['exploration_time_seconds'], 2),
             'actions': exploration_result['total_actions']
         }
 
         return jsonify({
             'success': True,
-            'message': f'[v5] 探索完成: {exploration_result["explored_nodes"]}/{exploration_result["total_nodes"]} 节点',
+            'message': f'[v5] 探索完成: {exploration_result["total_pages"]} 页面, {exploration_result["total_transitions"]} 跳转',
             'result': exploration_status['result']
         })
 
@@ -1462,6 +1474,216 @@ def explore_node_start():
         return jsonify({
             'success': False,
             'message': f'探索失败: {str(e)}',
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/maps/list', methods=['GET'])
+def maps_list():
+    """列出所有已保存的 map 文件"""
+    try:
+        import os
+        import glob
+        from datetime import datetime
+
+        base_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'maps')
+
+        if not os.path.exists(base_dir):
+            return jsonify({
+                'success': True,
+                'data': []
+            })
+
+        maps = []
+        # 遍历所有包目录
+        for pkg_dir in os.listdir(base_dir):
+            pkg_path = os.path.join(base_dir, pkg_dir)
+            if not os.path.isdir(pkg_path):
+                continue
+
+            # 查找该包下的所有 nav_map_*.json 文件
+            pattern = os.path.join(pkg_path, 'nav_map_*.json')
+            for filepath in glob.glob(pattern):
+                filename = os.path.basename(filepath)
+                stat = os.stat(filepath)
+                maps.append({
+                    'package': pkg_dir.replace('_', '.'),
+                    'filename': filename,
+                    'filepath': filepath,
+                    'size': stat.st_size,
+                    'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                })
+
+        # 按修改时间倒序排列
+        maps.sort(key=lambda x: x['modified'], reverse=True)
+
+        return jsonify({
+            'success': True,
+            'data': maps
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/maps/latest', methods=['GET'])
+def maps_latest():
+    """获取最新的 map 文件内容"""
+    try:
+        import os
+        import glob
+        import json
+
+        base_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'maps')
+
+        if not os.path.exists(base_dir):
+            return jsonify({
+                'success': False,
+                'message': '没有找到 map 文件'
+            }), 404
+
+        # 查找所有 nav_map_*.json 文件
+        all_maps = []
+        for pkg_dir in os.listdir(base_dir):
+            pkg_path = os.path.join(base_dir, pkg_dir)
+            if not os.path.isdir(pkg_path):
+                continue
+
+            pattern = os.path.join(pkg_path, 'nav_map_*.json')
+            for filepath in glob.glob(pattern):
+                stat = os.stat(filepath)
+                all_maps.append({
+                    'filepath': filepath,
+                    'mtime': stat.st_mtime
+                })
+
+        if not all_maps:
+            return jsonify({
+                'success': False,
+                'message': '没有找到 map 文件'
+            }), 404
+
+        # 找到最新的文件
+        latest = max(all_maps, key=lambda x: x['mtime'])
+
+        # 读取文件内容
+        with open(latest['filepath'], 'r', encoding='utf-8') as f:
+            content = json.load(f)
+
+        return jsonify({
+            'success': True,
+            'filepath': latest['filepath'],
+            'data': content
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/maps/load', methods=['POST'])
+def maps_load():
+    """加载指定的 map 文件"""
+    try:
+        import os
+        import json
+
+        data = request.json
+        filepath = data.get('filepath', '')
+
+        if not filepath:
+            return jsonify({
+                'success': False,
+                'message': '请指定文件路径'
+            }), 400
+
+        # 安全检查：只允许访问 maps 目录下的文件
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'maps'))
+        abs_filepath = os.path.abspath(filepath)
+
+        if not abs_filepath.startswith(base_dir):
+            return jsonify({
+                'success': False,
+                'message': '非法路径'
+            }), 403
+
+        if not os.path.exists(abs_filepath):
+            return jsonify({
+                'success': False,
+                'message': '文件不存在'
+            }), 404
+
+        # 读取文件内容
+        with open(abs_filepath, 'r', encoding='utf-8') as f:
+            content = json.load(f)
+
+        return jsonify({
+            'success': True,
+            'filepath': abs_filepath,
+            'data': content
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/explore/node/save', methods=['POST'])
+def explore_node_save():
+    """保存 Node 驱动探索结果"""
+    global explorer_instance, exploration_status
+
+    if not explorer_instance:
+        return jsonify({'success': False, 'message': '没有探索结果'}), 400
+
+    # 检查是否是 NodeMapBuilder
+    if exploration_status.get('version') != 'node':
+        return jsonify({'success': False, 'message': '当前不是 Node 驱动探索结果'}), 400
+
+    try:
+        import os
+        from datetime import datetime
+
+        # 获取包名
+        package_name = exploration_status.get('package', 'unknown')
+
+        # 创建保存目录: maps/{package_name}/
+        base_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'maps')
+        save_dir = os.path.join(base_dir, package_name.replace('.', '_'))
+        os.makedirs(save_dir, exist_ok=True)
+
+        # 生成文件名（带时间戳）
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'nav_map_{timestamp}.json'
+        filepath = os.path.join(save_dir, filename)
+
+        # 保存
+        explorer_instance.save(filepath)
+
+        return jsonify({
+            'success': True,
+            'message': f'已保存到 {filepath}',
+            'filepath': filepath
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': str(e),
             'traceback': traceback.format_exc()
         }), 500
 
@@ -1751,6 +1973,61 @@ def vlm_config_set():
         })
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/vlm/test', methods=['POST'])
+def vlm_test():
+    """测试 VLM API 连接"""
+    if not VLM_AVAILABLE:
+        return jsonify({'success': False, 'message': 'VLM 模块不可用'}), 400
+
+    try:
+        from src.auto_map_builder.vlm_engine import VLMConfig, VLMEngine
+        import base64
+
+        data = request.json
+        api_url = data.get('api_base_url', '')
+        api_key = data.get('api_key', '')
+        model_name = data.get('model_name', 'qwen-vl-plus')
+
+        if not api_url or not api_key:
+            return jsonify({'success': False, 'message': '请提供 API URL 和 API Key'}), 400
+
+        # 创建临时配置
+        test_config = VLMConfig(
+            api_base_url=api_url,
+            api_key=api_key,
+            model_name=model_name,
+            timeout=30
+        )
+
+        # 创建引擎并测试
+        engine = VLMEngine(test_config)
+
+        # 创建一个简单的测试图片 (1x1 红色像素)
+        from PIL import Image
+        from io import BytesIO
+        img = Image.new('RGB', (100, 100), color='red')
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        test_image = buffer.getvalue()
+
+        # 调用 API
+        response = engine._call_api(test_image, "这是什么颜色的图片？请简短回答。")
+
+        return jsonify({
+            'success': True,
+            'message': f'API 连接成功，模型: {model_name}',
+            'response': response[:500] if response else ''
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'success': False,
+            'message': f'API 测试失败: {str(e)}',
+            'traceback': traceback.format_exc()
+        }), 500
 
 
 @app.route('/api/debug/vlm_status', methods=['GET', 'POST'])

@@ -72,7 +72,7 @@ from .som_analyzer import SoMAnalyzer, AnalysisResult as SoMAnalysisResult, Acti
 from .som_explorer import SoMExplorer, SoMExplorationResult
 
 # v5 Node 驱动模块
-from .node_explorer import NodeExplorer, NavigationMap, NodeLocator as NodeLocatorV5, NodeTransition, NavNode
+from .node_explorer import NodeExplorer, NavigationMap, NodeLocator as NodeLocatorV5, PageInfo, Transition, NavNode
 
 
 class NodeMapBuilder:
@@ -92,6 +92,9 @@ class NodeMapBuilder:
         self.log_callback = log_callback
         self._explorer: NodeExplorer = None
         self._result = None
+        # 预设配置（在 explore 前设置）
+        self._explore_mode = "serial"
+        self._click_delay = 1.5
 
     @property
     def status(self):
@@ -104,6 +107,18 @@ class NodeMapBuilder:
         if self._explorer:
             return self._explorer.nav_map
         return None
+
+    def set_mode(self, mode: str):
+        """设置探索模式: 'serial' 或 'parallel'"""
+        self._explore_mode = mode
+        if self._explorer:
+            self._explorer.set_mode(mode)
+
+    def set_click_delay(self, delay: float):
+        """设置点击后等待时间（秒）"""
+        self._click_delay = delay
+        if self._explorer:
+            self._explorer.set_click_delay(delay)
 
     def pause(self):
         if self._explorer:
@@ -119,6 +134,9 @@ class NodeMapBuilder:
 
     def explore(self, package_name: str):
         self._explorer = NodeExplorer(self.client, self.config, self.log_callback)
+        # 应用预设配置
+        self._explorer.set_mode(self._explore_mode)
+        self._explorer.set_click_delay(self._click_delay)
         self._result = self._explorer.explore(package_name)
         return self._result
 
@@ -513,7 +531,8 @@ __all__ = [
     "NodeMapBuilder",
     "NodeExplorer",
     "NavigationMap",
-    "NodeTransition",
+    "PageInfo",
+    "Transition",
     "NavNode",
 
     # v4 坐标驱动

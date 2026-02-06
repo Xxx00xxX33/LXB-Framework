@@ -193,21 +193,28 @@ role 类型：back_button, search, menu, top_tab, bottom_tab, fab, sidebar
 
     def _call_api(self, image_bytes: bytes, prompt: str) -> str:
         """调用 VLM API"""
-        client = self._get_client()
-        image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+        try:
+            client = self._get_client()
+            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
 
-        response = client.chat.completions.create(
-            model=self.config.model_name,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
-                    {"type": "text", "text": prompt}
-                ]
-            }],
-            max_tokens=4096
-        )
-        return response.choices[0].message.content
+            response = client.chat.completions.create(
+                model=self.config.model_name,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
+                        {"type": "text", "text": prompt}
+                    ]
+                }],
+                max_tokens=4096
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            # 打印详细错误信息
+            import traceback
+            print(f"[VLM] API 调用失败: {e}")
+            print(f"[VLM] 堆栈:\n{traceback.format_exc()}")
+            raise  # 重新抛出让上层处理
 
     def _parse_json(self, response: str) -> Dict:
         """从响应中提取 JSON"""
