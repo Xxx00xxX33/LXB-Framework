@@ -33,6 +33,7 @@ MANIFEST
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+.cortex_llm_planner.json
 
 # Unit test / coverage reports
 htmlcov/
