@@ -147,6 +147,18 @@ class LXBLinkClient:
 
         logger.info(f"Client connected to {self.host}:{self.port}")
 
+    def reconnect(self, handshake: bool = True) -> None:
+        """
+        Hard reconnect transport to recover from interrupted sessions.
+        """
+        try:
+            self.disconnect()
+        except Exception:
+            pass
+        self.connect()
+        if handshake:
+            self.handshake()
+
     def disconnect(self) -> None:
         """
         Close connection to remote device and release resources.
@@ -370,6 +382,13 @@ class LXBLinkClient:
             f"({len(response) / 1024:.1f} KB)"
         )
         return response
+
+    def reset_runtime_state(self, reset_seq: bool = True) -> int:
+        """
+        Reset client transport runtime state and drain stale UDP frames.
+        """
+        self._ensure_connected()
+        return self._transport.reset_runtime_state(reset_seq=reset_seq) # type: ignore
 
     def wake(self) -> bytes:
         """

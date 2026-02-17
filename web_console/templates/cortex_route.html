@@ -181,6 +181,7 @@ async function runFsm() {
         user_task: task,
         map_filepath: document.getElementById('mapSelect').value || '',
         package_name: document.getElementById('pkgFilter').value.trim(),
+        reconnect_before_run: true,
         use_llm_planner: true,
         route_config: {
             node_exists_retries: Number(document.getElementById('nodeRetries').value || '3'),

@@ -125,6 +125,22 @@ def _task_finish(task_id: str, success: bool, result: dict = None, message: str 
         t['message'] = message or ''
 
 
+def _prepare_link_for_task(reconnect: bool = True) -> None:
+    """
+    Recover link state after abrupt task interruption.
+    """
+    global client
+    if not client:
+        raise RuntimeError('device not connected')
+    if reconnect:
+        client.reconnect(handshake=True)
+    else:
+        try:
+            client.reset_runtime_state(reset_seq=False)
+        except Exception:
+            pass
+
+
 def _build_llm_complete(config: dict):
     from openai import OpenAI
 
@@ -2132,6 +2148,7 @@ def cortex_route_then_act_run():
         from src.cortex import RouteThenActCortex, RouteConfig, MapPromptPlanner
 
         data = request.json or {}
+        _prepare_link_for_task(reconnect=bool(data.get('reconnect_before_run', True)))
         user_task = (data.get('user_task') or '').strip()
         if not user_task:
             return jsonify({'success': False, 'message': 'user_task is required'}), 400
@@ -2284,6 +2301,8 @@ def cortex_route_then_act_run():
 def _run_cortex_fsm_logic(data: dict, log_callback):
     global client
     from src.cortex import CortexFSMEngine, FSMConfig, LLMPlanner, RouteConfig
+
+    _prepare_link_for_task(reconnect=bool(data.get('reconnect_before_run', True)))
 
     user_task = (data.get('user_task') or '').strip()
     if not user_task:

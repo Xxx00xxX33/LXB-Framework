@@ -119,6 +119,27 @@ class Transport:
             self._connected = False
             logger.info("Transport disconnected")
 
+    def reset_runtime_state(
+        self,
+        reset_seq: bool = True,
+        drain_timeout: float = 0.01,
+        max_frames: int = 1024,
+    ) -> int:
+        """
+        Reset local runtime state after abrupt interruption.
+
+        - Optionally reset sequence counter
+        - Drain stale UDP frames from receive buffer
+
+        Returns:
+            Number of drained frames.
+        """
+        if reset_seq:
+            self._seq = 0
+        drained = self._drain_receive_buffer(timeout=drain_timeout, max_frames=max_frames)
+        logger.info(f"Transport runtime reset: reset_seq={reset_seq}, drained={drained}")
+        return drained
+
     def _next_seq(self) -> int:
         """
         Get next sequence number and increment counter.
@@ -163,6 +184,27 @@ class Transport:
         data, addr = self._sock.recvfrom(SOCKET_BUFFER_SIZE)
         logger.debug(f"Received frame: {len(data)} bytes from {addr}")
         return data, addr
+
+    def _drain_receive_buffer(self, timeout: float = 0.01, max_frames: int = 1024) -> int:
+        """
+        Drain stale frames from UDP receive buffer.
+        """
+        if not self._connected or not self._sock:
+            return 0
+        original_timeout = self._sock.gettimeout()
+        self._sock.settimeout(timeout)
+        drained = 0
+        try:
+            while drained < max_frames:
+                try:
+                    data, _ = self._sock.recvfrom(SOCKET_BUFFER_SIZE)
+                    drained += 1
+                    logger.debug(f"Drained stale frame: {len(data)} bytes")
+                except socket.timeout:
+                    break
+        finally:
+            self._sock.settimeout(original_timeout)
+        return drained
 
     def send_reliable(self, cmd: int, payload: bytes = b'') -> bytes:
         """
@@ -344,6 +386,12 @@ class Transport:
             raise LXBProtocolError("Transport not connected", 0)
 
         logger.info("Starting fragmented screenshot transfer...")
+
+        # Defensive cleanup: avoid consuming stale META/CHUNK frames from
+        # previous interrupted screenshot sessions.
+        drained = self._drain_receive_buffer(timeout=0.005, max_frames=1024)
+        if drained:
+            logger.info(f"Drained {drained} stale frames before IMG_REQ")
 
         # Step 1: Send IMG_REQ
         seq_req = self._next_seq()
