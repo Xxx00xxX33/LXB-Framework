@@ -80,7 +80,8 @@ CMD_MULTI_TOUCH = 0x13  # Multi-point touch (new)
 CMD_GESTURE = 0x14      # Complex gesture (pinch/rotate) (new)
 CMD_WAKE = 0x1A         # Wake/unlock device (migrated from 0x0A)
 CMD_UNLOCK = 0x1B       # Slide to unlock (no password) ⭐
-# 0x15-0x19, 0x1C-0x1F: Reserved
+CMD_SET_TOUCH_MODE = 0x1C  # Touch mode: 0=uia first, 1=shell(input) first
+# 0x15-0x19, 0x1D-0x1F: Reserved
 
 # -----------------------------------------------------------------------------
 # Input Extension (0x20-0x2F) - Advanced Input
@@ -201,6 +202,7 @@ CHANNEL_MAP = {
     CMD_INPUT_TEXT: CH_CONTROL,
     CMD_UNLOCK: CH_CONTROL,
     CMD_WAKE: CH_CONTROL,
+    CMD_SET_TOUCH_MODE: CH_CONTROL,
     CMD_LAUNCH_APP: CH_CONTROL,
     CMD_STOP_APP: CH_CONTROL,
     CMD_GET_SCREEN_STATE: CH_CONTROL,

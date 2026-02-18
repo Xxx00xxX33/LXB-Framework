@@ -80,6 +80,14 @@
             <input id="llmApiUrl" placeholder="https://api.xxx.com/v1">
         </div>
         <div class="group">
+            <label>Touch Mode</label>
+            <select id="touchMode">
+                <option value="shell_first">input ??????</option>
+                <option value="uiautomation_first">UiAutomation ??</option>
+            </select>
+        </div>
+
+        <div class="group">
             <label>API Key</label>
             <input id="llmApiKey" type="password" placeholder="sk-...">
         </div>
@@ -215,6 +223,7 @@ async function loadLlmConfig() {
     document.getElementById("llmTimeout").value = c.timeout ?? 60;
     document.getElementById("nodeRetries").value = c.node_exists_retries ?? 3;
     document.getElementById("nodeInterval").value = c.node_exists_interval_sec ?? 0.6;
+    document.getElementById("touchMode").value = c.touch_mode || "shell_first";
 }
 
 async function saveLlmConfig() {
@@ -225,7 +234,8 @@ async function saveLlmConfig() {
         temperature: 0.1,
         timeout: Number(document.getElementById("llmTimeout").value || "60"),
         node_exists_retries: Number(document.getElementById("nodeRetries").value || "3"),
-        node_exists_interval_sec: Number(document.getElementById("nodeInterval").value || "0.6")
+        node_exists_interval_sec: Number(document.getElementById("nodeInterval").value || "0.6"),
+        touch_mode: document.getElementById("touchMode").value
     };
     const data = await jfetch("/api/cortex/llm/config", "POST", payload);
     feedPush("sys", "llm/config", data.message || (data.success ? "ok" : "failed"));
@@ -332,6 +342,7 @@ async function runFsm() {
         user_task: task,
         map_filepath: document.getElementById("mapSelect").value || "",
         package_name: document.getElementById("pkgFilter").value.trim(),
+        touch_mode: document.getElementById("touchMode").value,
         reconnect_before_run: true,
         use_llm_planner: true,
         route_config: {

@@ -306,6 +306,34 @@ public class ExecutionEngine {
     }
 
     /**
+     * Handle touch mode switch (0x1C).
+     *
+     * Payload format: mode[1B]
+     *   0 = UiAutomation first
+     *   1 = shell(input) first
+     *
+     * Response: status[1B]
+     */
+    public byte[] handleSetTouchMode(byte[] payload) {
+        if (payload.length < 1) {
+            System.err.println(TAG + " SET_TOUCH_MODE payload too short: " + payload.length);
+            return new byte[]{0x00};
+        }
+
+        if (uiAutomation == null) {
+            System.err.println(TAG + " UiAutomation not available");
+            return new byte[]{0x00};
+        }
+
+        int mode = payload[0] & 0xFF;
+        boolean shellFirst = mode != 0;
+        uiAutomation.setPreferShellInputTouch(shellFirst);
+        System.out.println(TAG + " SET_TOUCH_MODE: " + (shellFirst ? "shell_first" : "uiautomation_first"));
+        return new byte[]{0x01};
+    }
+
+
+    /**
      * 处理 LAUNCH_APP 命令 (0x43)
      *
      * Payload 格式: flags[1B] + package_len[2B] + package_name[UTF-8]

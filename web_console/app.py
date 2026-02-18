@@ -68,6 +68,7 @@ def _default_cortex_llm_config() -> dict:
         'timeout': int(os.getenv('CORTEX_LLM_TIMEOUT', '30')),
         'node_exists_retries': int(os.getenv('CORTEX_NODE_EXISTS_RETRIES', '3')),
         'node_exists_interval_sec': float(os.getenv('CORTEX_NODE_EXISTS_INTERVAL_SEC', '0.6')),
+        'touch_mode': os.getenv('CORTEX_TOUCH_MODE', 'shell_first'),
     }
 
 
@@ -841,6 +842,25 @@ def cmd_get_screen_size():
                 'height': height,
                 'density': density
             }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/command/touch_mode', methods=['POST'])
+def cmd_touch_mode():
+    """Set touch execution mode on Android side."""
+    if not client:
+        return jsonify({'success': False, 'message': '未连接'}), 400
+    try:
+        data = request.json or {}
+        mode = str(data.get('mode') or 'shell_first').strip()
+        shell_first = mode != 'uiautomation_first'
+        ok = client.set_touch_mode(shell_first=shell_first)
+        return jsonify({
+            'success': bool(ok),
+            'message': f"touch_mode set to {'shell_first' if shell_first else 'uiautomation_first'}",
+            'response': {'touch_mode': 'shell_first' if shell_first else 'uiautomation_first'}
         })
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -2085,6 +2105,7 @@ def cortex_llm_config_get():
                 'timeout': cfg.get('timeout', 30),
                 'node_exists_retries': cfg.get('node_exists_retries', 3),
                 'node_exists_interval_sec': cfg.get('node_exists_interval_sec', 0.6),
+                'touch_mode': cfg.get('touch_mode', 'shell_first'),
             }
         })
     except Exception as e:
@@ -2111,6 +2132,7 @@ def cortex_llm_config_set():
             'timeout': int(data.get('timeout', current.get('timeout', 30))),
             'node_exists_retries': int(data.get('node_exists_retries', current.get('node_exists_retries', 3))),
             'node_exists_interval_sec': float(data.get('node_exists_interval_sec', current.get('node_exists_interval_sec', 0.6))),
+            'touch_mode': (data.get('touch_mode', current.get('touch_mode', 'shell_first')) or 'shell_first'),
         }
         raw_key = data.get('api_key')
         if raw_key and raw_key != '***':
@@ -2340,6 +2362,13 @@ def _run_cortex_fsm_logic(data: dict, log_callback):
         'candidate_count': 0,
     }
     round1_app = {}
+
+    # Apply touch mode preference for this run.
+    touch_mode = str(data.get('touch_mode') or planner_cfg.get('touch_mode') or 'shell_first').strip()
+    try:
+        client.set_touch_mode(shell_first=(touch_mode != 'uiautomation_first'))
+    except Exception:
+        pass
 
     app_candidates_for_fsm = []
     installed_apps = []

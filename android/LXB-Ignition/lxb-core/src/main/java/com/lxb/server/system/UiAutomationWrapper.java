@@ -18,6 +18,7 @@ import java.util.List;
 public class UiAutomationWrapper {
 
     private static final String TAG = "[LXB][UiAuto]";
+    private static volatile boolean preferShellInputTouch = true;
 
     // 反射获取的 UiAutomation 实例
     private Object uiAutomation;
@@ -87,6 +88,15 @@ public class UiAutomationWrapper {
 
         System.out.println(TAG + " Initialized successfully");
         System.out.println(TAG + " Screen: " + screenWidth + "x" + screenHeight + " @" + screenDensity + "dpi");
+    }
+
+    public void setPreferShellInputTouch(boolean preferShell) {
+        preferShellInputTouch = preferShell;
+        System.out.println(TAG + " touch mode set: " + (preferShell ? "shell_first" : "uiautomation_first"));
+    }
+
+    public boolean isPreferShellInputTouch() {
+        return preferShellInputTouch;
     }
 
     /**
@@ -423,6 +433,12 @@ public class UiAutomationWrapper {
      * 点击屏幕
      */
     public boolean click(int x, int y) {
+        if (preferShellInputTouch) {
+            if (clickViaShell(x, y)) {
+                return true;
+            }
+        }
+
         // 优先使用 UiAutomation
         if (injectInputEventMethod != null && uiAutomation != null) {
             try {
@@ -475,6 +491,12 @@ public class UiAutomationWrapper {
      * 滑动手势
      */
     public boolean swipe(int x1, int y1, int x2, int y2, int duration) {
+        if (preferShellInputTouch) {
+            if (swipeViaShell(x1, y1, x2, y2, duration)) {
+                return true;
+            }
+        }
+
         // 优先使用 UiAutomation
         if (injectInputEventMethod != null && uiAutomation != null) {
             try {
@@ -547,6 +569,12 @@ public class UiAutomationWrapper {
      * 长按
      */
     public boolean longPress(int x, int y, int duration) {
+        if (preferShellInputTouch) {
+            if (longPressViaShell(x, y, duration)) {
+                return true;
+            }
+        }
+
         // 优先使用 UiAutomation
         if (injectInputEventMethod != null && uiAutomation != null) {
             try {

@@ -33,6 +33,7 @@ from .constants import (
     CMD_SWIPE,
     CMD_SCREENSHOT,
     CMD_WAKE,
+    CMD_SET_TOUCH_MODE,
     # Sense Layer commands
     CMD_GET_ACTIVITY,
     CMD_FIND_NODE,
@@ -861,6 +862,25 @@ class LXBLinkClient:
         success = len(response) > 0 and response[0] == 0x01
         logger.info(f"UNLOCK {'successful' if success else 'failed'}")
         return success
+
+    def set_touch_mode(self, shell_first: bool = True) -> bool:
+        """
+        Configure touch execution priority on Android side.
+
+        Args:
+            shell_first: True for input(shell) -> uiautomation fallback,
+                         False for uiautomation -> shell fallback.
+
+        Returns:
+            True if mode switch acknowledged.
+        """
+        self._ensure_connected()
+        mode = b'\x01' if shell_first else b'\x00'
+        logger.info(f"Sending SET_TOUCH_MODE: {'shell_first' if shell_first else 'uiautomation_first'}")
+        response = self._transport.send_reliable(CMD_SET_TOUCH_MODE, mode)
+        ok = len(response) > 0 and response[0] == 0x01
+        logger.info(f"SET_TOUCH_MODE {'successful' if ok else 'failed'}")
+        return ok
 
     def get_screen_state(self) -> tuple[bool, int]:
         """
