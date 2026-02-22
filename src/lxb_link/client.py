@@ -32,8 +32,10 @@ from .constants import (
     CMD_HEARTBEAT,
     CMD_TAP,
     CMD_SWIPE,
+    CMD_LONG_PRESS,
     CMD_SCREENSHOT,
     CMD_WAKE,
+    CMD_UNLOCK,
     CMD_SET_TOUCH_MODE,
     CMD_SET_SCREENSHOT_QUALITY,
     # Sense Layer commands
@@ -41,10 +43,15 @@ from .constants import (
     CMD_FIND_NODE,
     CMD_FIND_NODE_COMPOUND,
     CMD_DUMP_HIERARCHY,
+    CMD_DUMP_ACTIONS,
+    CMD_GET_SCREEN_STATE,
+    CMD_GET_SCREEN_SIZE,
     # Input Extension commands
     CMD_INPUT_TEXT,
     CMD_KEY_EVENT,
     # Lifecycle commands
+    CMD_LAUNCH_APP,
+    CMD_STOP_APP,
     CMD_LIST_APPS,
     # Match types for FIND_NODE
     MATCH_EXACT_TEXT,
@@ -337,7 +344,7 @@ class LXBLinkClient:
         import struct
         payload = struct.pack('>HHH', x, y, duration)
 
-        response = self._transport.send_reliable(0x12, payload)  # CMD_LONG_PRESS = 0x12
+        response = self._transport.send_reliable(CMD_LONG_PRESS, payload)
 
         logger.info(f"LONG_PRESS successful: ({x}, {y})")
         return response
@@ -914,7 +921,7 @@ class LXBLinkClient:
         self._ensure_connected()
 
         logger.info("Sending UNLOCK command")
-        response = self._transport.send_reliable(0x1B, b'')  # CMD_UNLOCK = 0x1B
+        response = self._transport.send_reliable(CMD_UNLOCK, b'')
 
         success = len(response) > 0 and response[0] == 0x01
         logger.info(f"UNLOCK {'successful' if success else 'failed'}")
@@ -973,7 +980,7 @@ class LXBLinkClient:
         self._ensure_connected()
 
         logger.info("Sending GET_SCREEN_STATE command")
-        response = self._transport.send_reliable(0x36, b'')  # CMD_GET_SCREEN_STATE = 0x36
+        response = self._transport.send_reliable(CMD_GET_SCREEN_STATE, b'')
 
         if len(response) >= 2:
             success = response[0] == 0x01
@@ -1035,7 +1042,7 @@ class LXBLinkClient:
         original_timeout = self._transport.timeout
         self._transport.timeout = self.timeout * 3
         try:
-            response = self._transport.send_reliable(0x33, b'')  # CMD_DUMP_ACTIONS = 0x33
+            response = self._transport.send_reliable(CMD_DUMP_ACTIONS, b'')
         finally:
             self._transport.timeout = original_timeout
 
@@ -1183,7 +1190,7 @@ class LXBLinkClient:
         self._ensure_connected()
 
         logger.info("Sending GET_SCREEN_SIZE command")
-        response = self._transport.send_reliable(0x37, b'')  # CMD_GET_SCREEN_SIZE = 0x37
+        response = self._transport.send_reliable(CMD_GET_SCREEN_SIZE, b'')
 
         if len(response) >= 7:
             import struct
@@ -1223,7 +1230,7 @@ class LXBLinkClient:
         pkg_bytes = package_name.encode('utf-8')
         payload = struct.pack('>BH', flags, len(pkg_bytes)) + pkg_bytes
 
-        response = self._transport.send_reliable(0x43, payload)  # CMD_LAUNCH_APP = 0x43
+        response = self._transport.send_reliable(CMD_LAUNCH_APP, payload)
 
         success = len(response) > 0 and response[0] == 0x01
         logger.info(f"LAUNCH_APP {'successful' if success else 'failed'}")
@@ -1251,7 +1258,7 @@ class LXBLinkClient:
         pkg_bytes = package_name.encode('utf-8')
         payload = struct.pack('>H', len(pkg_bytes)) + pkg_bytes
 
-        response = self._transport.send_reliable(0x44, payload)  # CMD_STOP_APP = 0x44
+        response = self._transport.send_reliable(CMD_STOP_APP, payload)
 
         success = len(response) > 0 and response[0] == 0x01
         logger.info(f"STOP_APP {'successful' if success else 'failed'}")

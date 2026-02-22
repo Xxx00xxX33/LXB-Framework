@@ -99,6 +99,7 @@ CMD_GET_ACTIVITY = 0x30    # Get current Activity name (new)
 CMD_DUMP_HIERARCHY = 0x31  # Dump UI tree (binary+string pool) (new)
 CMD_FIND_NODE = 0x32       # Find node with computation offloading (new)
 CMD_GET_FOCUSED = 0x33     # Get focused element (new)
+CMD_DUMP_ACTIONS = CMD_GET_FOCUSED  # Alias used by current Android implementation
 CMD_WAIT_FOR = 0x34        # Wait for element to appear (new)
 CMD_OCR_REGION = 0x35      # OCR on device (new)
 CMD_GET_SCREEN_STATE = 0x36  # Get screen state (off/on/locked)
