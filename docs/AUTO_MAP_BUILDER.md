@@ -16,6 +16,10 @@ The practical target is:
 
 Primary builder: `NodeMapBuilder` (`src/auto_map_builder/node_explorer.py`).
 
+Legacy/failed strategy code has been archived to:
+
+- `src/auto_map_builder/legacy/`
+
 Exploration is node-driven:
 
 - task queue stores nodes to explore,

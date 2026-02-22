@@ -1519,7 +1519,7 @@ def cmd_screenshot_raw():
 VLM_AVAILABLE = False
 try:
     from src.auto_map_builder import (
-        AutoMapBuilder, SemanticMapBuilder, SoMMapBuilder, CoordMapBuilder,
+        NodeMapBuilder,
         ExplorationConfig
     )
     from src.auto_map_builder.vlm_engine import VLMEngine
@@ -1531,7 +1531,7 @@ except ImportError as e:
     print(f"[app.py] Auto Map Builder 不可用: {e}")
 
 # 全局探索器实例和状态
-explorer_instance = None  # v2: AutoMapBuilder, v3: SemanticMapBuilder
+explorer_instance = None
 exploration_result = None
 exploration_status = {
     'running': False,
@@ -1547,8 +1547,16 @@ exploration_status = {
 }
 
 
+def _legacy_map_builder_disabled_response():
+    return jsonify({
+        'success': False,
+        'message': 'legacy auto_map_builder strategies are archived; use /api/explore/node/start'
+    }), 410
+
+
 @app.route('/api/explore/start', methods=['POST'])
 def explore_start():
+    return _legacy_map_builder_disabled_response()
     """启动应用探索 (v2 VLM+XML 融合)"""
     global client, explorer_instance, exploration_result, exploration_status
 
@@ -1779,6 +1787,7 @@ def explore_realtime():
 
 @app.route('/api/explore/v3/start', methods=['POST'])
 def explore_v3_start():
+    return _legacy_map_builder_disabled_response()
     """启动 v3 语义探索"""
     global client, explorer_instance, exploration_result, exploration_status
 
@@ -1876,6 +1885,7 @@ def explore_v3_start():
 
 @app.route('/api/explore/v3/graph', methods=['GET'])
 def explore_v3_graph():
+    return _legacy_map_builder_disabled_response()
     """获取 v3 导航图"""
     global explorer_instance
 
@@ -1949,6 +1959,7 @@ def explore_v3_graph():
 
 @app.route('/api/explore/v3/save', methods=['POST'])
 def explore_v3_save():
+    return _legacy_map_builder_disabled_response()
     """保存 v3 导航图"""
     global explorer_instance, exploration_result
 
@@ -1981,6 +1992,7 @@ def explore_v3_save():
 
 @app.route('/api/explore/v3/find_path', methods=['POST'])
 def explore_v3_find_path():
+    return _legacy_map_builder_disabled_response()
     """查找路径"""
     global explorer_instance
 
@@ -2035,6 +2047,7 @@ def explore_v3_find_path():
 
 @app.route('/api/explore/v3/navigate', methods=['POST'])
 def explore_v3_navigate():
+    return _legacy_map_builder_disabled_response()
     """执行导航"""
     global explorer_instance
 
@@ -2074,6 +2087,7 @@ def explore_v3_navigate():
 
 @app.route('/api/explore/som/start', methods=['POST'])
 def explore_som_start():
+    return _legacy_map_builder_disabled_response()
     """启动 SoM 探索（推荐）"""
     global client, explorer_instance, exploration_result, exploration_status
 
@@ -2171,6 +2185,7 @@ def explore_som_start():
 
 @app.route('/api/explore/coord/start', methods=['POST'])
 def explore_coord_start():
+    return _legacy_map_builder_disabled_response()
     """启动坐标驱动探索 (v4 推荐)"""
     global client, explorer_instance, exploration_result, exploration_status
 
