@@ -1,45 +1,34 @@
-﻿# Web Console
+﻿# LXB-WebConsole
 
 Flask-based control console for LXB-Framework.
 
-## Entry
+## Scope
+LXB-WebConsole is the unified UI shell for:
+- command debugging,
+- map building and map inspection,
+- Cortex route and task execution.
 
+## Entry
 - Main shell: `http://localhost:5000/`
-- The shell hosts internal pages via in-page content switching.
+- Internal pages are hosted inside the shell.
 
 ## Internal Pages
-
 - `Command Studio` (`/command_studio`)
-  - Protocol command debugging UI.
-  - Sends low-level commands via existing `main.js` command handlers.
-- `Map Builder` (`/map_builder`)
-  - Node-driven map exploration UI.
-  - Live logs, screenshot panel, node queue/status.
+- `LXB-MapBuilder` (`/map_builder`)
 - `Map Viewer` (`/map_viewer`)
-  - Navigation graph visualization and map inspection.
-- `Cortex Route` (`/cortex_route`)
-  - Route planning and execution (planner -> target_page -> BFS route chain).
+- `LXB-Cortex` (`/cortex_route`)
 
 ## Shared Navigation + Connection
-
-The shell (`index.html`) owns:
-
-- Shared top navigation between all four pages.
-- Global device connection bar (`host`, `port`, connect/disconnect, status).
-
-Sub-pages no longer provide their own top navigation. Connection UI inside sub-pages is hidden/removed in favor of the global bar.
+The shell (`index.html`) owns shared top navigation and global connection controls.
 
 ## Start
-
 ```bash
 cd web_console
 python app.py
 ```
 
 ## Key Backend Routes
-
 Page routes:
-
 - `/`
 - `/command_studio`
 - `/map_builder`
@@ -47,19 +36,19 @@ Page routes:
 - `/cortex_route`
 
 Core API groups:
-
 - `/api/connect`, `/api/disconnect`, `/api/status`
-- `/api/command/*` (tap/swipe/find_node/dump_actions/...)
-- `/api/explore/*` (map exploration)
-- `/api/maps/*` (map list/load/save)
-- `/api/cortex/llm/*`
-- `/api/cortex/route/run` and `/api/cortex/route_then_act/run`
+- `/api/command/*`
+- `/api/explore/*`, `/api/maps/*`
+- `/api/cortex/*`
 
 ## Frontend Files
+- `templates/index.html`
+- `templates/command_studio.html`
+- `templates/map_builder.html`
+- `templates/map_viewer.html`
+- `templates/cortex_route.html`
+- `static/js/main.js`
 
-- `templates/index.html`: shell container + shared nav + global connection.
-- `templates/command_studio.html`: command debugger UI.
-- `templates/map_builder.html`: map building UI.
-- `templates/map_viewer.html`: map visualization UI.
-- `templates/cortex_route.html`: route-stage debug UI.
-- `static/js/main.js`: command studio runtime handlers (ID-based bindings).
+## Cross References
+- `docs/zh/lxb_web_console.md`
+- `docs/en/lxb_web_console.md`

@@ -59,24 +59,30 @@ class NodeLocator:
     content_desc: Optional[str] = None
     class_name: Optional[str] = None
     parent_resource_id: Optional[str] = None
+    locator_index: Optional[int] = None      # 共享同一 locator 的候选序号（0-based）
+    locator_count: Optional[int] = None      # 共享同一 locator 的候选总数
     bounds: Optional[Tuple[int, int, int, int]] = None
 
     def to_dict(self) -> dict:
         """转换为精简字典（只保留有值的字段）"""
         d = {}
-        if self.resource_id:
+        if self.resource_id is not None:
             # 只保留 ID 部分
             rid = self.resource_id.split("/")[-1] if "/" in self.resource_id else self.resource_id
             d["resource_id"] = rid
-        if self.text:
+        if self.text is not None:
             d["text"] = self.text
-        if self.content_desc:
+        if self.content_desc is not None:
             d["content_desc"] = self.content_desc
-        if self.class_name:
+        if self.class_name is not None:
             d["class"] = self.class_name.split(".")[-1]  # 只保留短名
-        if self.parent_resource_id:
+        if self.parent_resource_id is not None:
             prid = self.parent_resource_id.split("/")[-1] if "/" in self.parent_resource_id else self.parent_resource_id
             d["parent_rid"] = prid
+        if self.locator_index is not None:
+            d["locator_index"] = int(self.locator_index)
+        if self.locator_count is not None:
+            d["locator_count"] = int(self.locator_count)
         # bounds 作为 hint 预留（用于自学习，不用于定位）
         if self.bounds and len(self.bounds) >= 4:
             d["bounds_hint"] = list(self.bounds)
@@ -86,26 +92,39 @@ class NodeLocator:
         """生成稳定唯一标识，降低低信息节点误合并。"""
         parts: List[str] = []
 
-        rid = ""
-        if self.resource_id:
-            rid = self.resource_id.split("/")[-1] if "/" in self.resource_id else self.resource_id
-            rid = rid.strip().lower()
-        if self._is_informative_resource_id(rid):
+        rid = (self.resource_id or "")
+        rid = rid.split("/")[-1] if "/" in rid else rid
+        rid = rid.strip().lower()
+        if rid == "":
+            parts.append("id:__empty__")
+        elif self._is_informative_resource_id(rid):
             parts.append(f"id:{rid}")
 
-        if self.text and len(self.text) <= 24:
-            parts.append(f"text:{self.text.strip().lower()}")
-        if self.content_desc and len(self.content_desc) <= 24:
-            parts.append(f"desc:{self.content_desc.strip().lower()}")
+        text = (self.text or "").strip().lower()
+        if text == "":
+            parts.append("text:__empty__")
+        elif len(text) <= 24:
+            parts.append(f"text:{text}")
+
+        desc = (self.content_desc or "").strip().lower()
+        if desc == "":
+            parts.append("desc:__empty__")
+        elif len(desc) <= 24:
+            parts.append(f"desc:{desc}")
+
         if self.class_name:
             cls = self.class_name.split(".")[-1].strip().lower()
             if cls:
                 parts.append(f"class:{cls}")
-        if self.parent_resource_id:
-            prid = self.parent_resource_id.split("/")[-1] if "/" in self.parent_resource_id else self.parent_resource_id
-            prid = prid.strip().lower()
-            if self._is_informative_resource_id(prid):
-                parts.append(f"pid:{prid}")
+        prid = (self.parent_resource_id or "")
+        prid = prid.split("/")[-1] if "/" in prid else prid
+        prid = prid.strip().lower()
+        if prid == "":
+            parts.append("pid:__empty__")
+        elif self._is_informative_resource_id(prid):
+            parts.append(f"pid:{prid}")
+        if self.locator_count is not None and self.locator_count <= 3 and self.locator_index is not None:
+            parts.append(f"lidx:{int(self.locator_index)}/{int(self.locator_count)}")
 
         if not parts:
             return f"unknown:{id(self)}"
@@ -164,16 +183,13 @@ class NodeLocator:
           op:    0=EQUALS, 1=CONTAINS, 2=STARTS_WITH, 3=ENDS_WITH
         """
         conditions = []
-        if self.resource_id:
-            conditions.append((1, 0, self.resource_id))   # RESOURCE_ID, EQUALS
-        if self.text:
-            conditions.append((0, 0, self.text))           # TEXT, EQUALS
-        if self.content_desc:
-            conditions.append((2, 0, self.content_desc))   # CONTENT_DESC, EQUALS
+        # 显式空值也是特征：缺字段按空字符串参与匹配
+        conditions.append((1, 0, self.resource_id or ""))      # RESOURCE_ID, EQUALS
+        conditions.append((0, 0, self.text or ""))             # TEXT, EQUALS
+        conditions.append((2, 0, self.content_desc or ""))     # CONTENT_DESC, EQUALS
         if self.class_name:
             conditions.append((3, 3, self.class_name.split(".")[-1]))  # CLASS, ENDS_WITH
-        if self.parent_resource_id:
-            conditions.append((4, 0, self.parent_resource_id))  # PARENT_RESOURCE_ID, EQUALS
+        conditions.append((4, 0, self.parent_resource_id or ""))  # PARENT_RESOURCE_ID, EQUALS
         if activity:
             conditions.append((5, 0, activity))            # ACTIVITY, EQUALS
         return conditions
@@ -186,11 +202,13 @@ class NodeLocator:
         elif d.get("bounds_hint"):
             bounds = tuple(d["bounds_hint"])
         return NodeLocator(
-            resource_id=d.get("resource_id"),
-            text=d.get("text"),
-            content_desc=d.get("content_desc"),
-            class_name=d.get("class") or d.get("class_name"),
-            parent_resource_id=d.get("parent_rid"),
+            resource_id=d.get("resource_id", ""),
+            text=d.get("text", ""),
+            content_desc=d.get("content_desc", ""),
+            class_name=(d.get("class") or d.get("class_name") or ""),
+            parent_resource_id=d.get("parent_rid", ""),
+            locator_index=d.get("locator_index"),
+            locator_count=d.get("locator_count"),
             bounds=bounds
         )
 
@@ -918,6 +936,18 @@ NAV|100|2200|首页|tab|home
     def _pick_best_bounds(self, locator: NodeLocator, candidates: List[Tuple[int, int, int, int]]) -> Optional[Tuple[int, int, int, int]]:
         if not candidates:
             return None
+        # 共享 locator 的候选兜底：候选<=3 时按固定排序取第 n 个
+        if (
+            locator.locator_index is not None
+            and locator.locator_count is not None
+            and int(locator.locator_count) <= 3
+            and len(candidates) <= 3
+        ):
+            ordered = sorted(candidates, key=lambda b: (b[1], b[0], b[3], b[2]))
+            idx = int(locator.locator_index)
+            if 0 <= idx < len(ordered):
+                return ordered[idx]
+            self.log("debug", f"    [find_node] lidx out_of_range: idx={idx}, ordered={len(ordered)}, locator_count={locator.locator_count}")
         hint = locator.bounds if locator.bounds and len(locator.bounds) >= 4 else None
         if not hint:
             return min(candidates, key=self._bounds_area)
@@ -944,6 +974,7 @@ NAV|100|2200|首页|tab|home
         """
         desc = label or locator.unique_key()
         self.log("debug", f"    [find_node] start: {desc}")
+        attempts: List[str] = []
 
         # 1. 尝试 find_node_compound（复合条件 >= 2 时使用）
         conditions = locator.compound_conditions(activity=activity)
@@ -957,13 +988,23 @@ NAV|100|2200|首页|tab|home
                     candidates = self._normalize_bounds_candidates(bounds)
                     best = self._pick_best_bounds(locator, candidates)
                     if not best:
+                        attempts.append(f"compound(status={status},raw={len(bounds)},normalized=0)")
                         raise RuntimeError("empty bounds candidates")
                     x, y = self._bounds_center(best)
+                    selector = "lidx" if (
+                        locator.locator_index is not None
+                        and locator.locator_count is not None
+                        and int(locator.locator_count) <= 3
+                        and len(candidates) <= 3
+                    ) else "geom"
                     self.log("info", f"    [find_node] compound hit: {desc} -> ({x}, {y}), candidates={len(candidates)}")
+                    self.log("debug", f"    [find_node] compound select: selector={selector}, picked={best}")
                     self._tap(x, y)
                     return True
+                attempts.append(f"compound(status={status},has_bounds={bool(bounds)})")
                 self.log("debug", f"    [find_node] compound miss: status={status}, has_bounds={bool(bounds)}")
             except Exception as e:
+                attempts.append(f"compound(error={e})")
                 self.log("debug", f"    [find_node] compound error: {e}")
 
         # 2. fallback: find_node 逐个尝试（单字段）
@@ -978,28 +1019,29 @@ NAV|100|2200|首页|tab|home
                     candidates = self._normalize_bounds_candidates(bounds)
                     best = self._pick_best_bounds(locator, candidates)
                     if not best:
+                        attempts.append(f"q{idx}(type={match_type},status={status},raw={len(bounds)},normalized=0)")
                         self.log("debug", f"    [find_node] query#{idx} empty normalized candidates")
                         continue
                     x, y = self._bounds_center(best)
+                    selector = "lidx" if (
+                        locator.locator_index is not None
+                        and locator.locator_count is not None
+                        and int(locator.locator_count) <= 3
+                        and len(candidates) <= 3
+                    ) else "geom"
                     self.log("info", f"    [find_node] query#{idx} hit: {desc} -> ({x}, {y}), candidates={len(candidates)}")
+                    self.log("debug", f"    [find_node] query#{idx} select: selector={selector}, picked={best}")
                     self._tap(x, y)
                     return True
+                attempts.append(f"q{idx}(type={match_type},status={status},has_bounds={bool(bounds)})")
                 self.log("debug", f"    [find_node] query#{idx} miss: status={status}, has_bounds={bool(bounds)}")
             except Exception as e:
+                attempts.append(f"q{idx}(type={match_type},error={e})")
                 self.log("debug", f"    [find_node] query#{idx} error: {e}")
                 continue
 
-        # 3. fallback: 使用 bounds 坐标
-        click_point = locator.click_point()
-        if click_point:
-            if locator.resource_id or locator.text or locator.content_desc:
-                self.log("warn", f"    [find_node] fail: semantic locator blocked bounds fallback: {desc}")
-                return False
-            self.log("warn", f"    [find_node] fallback bounds tap: {desc} -> {click_point}")
-            self._tap(*click_point)
-            return True
-
-        self.log("warn", f"    [find_node] fail: cannot locate node: {desc}")
+        # 不允许坐标兜底，确保 map 的跨机型可迁移性
+        self.log("warn", f"    [find_node] fail: cannot locate node by retrieval-only strategy: {desc}; attempts={' | '.join(attempts) if attempts else 'none'}")
         return False
 
     def _back(self):
@@ -1584,18 +1626,112 @@ NAV|100|2200|首页|tab|home
     def _create_locator_from_xml(self, xml_node: Dict, xml_nodes: List[Dict] = None) -> NodeLocator:
         """从 XML 节点创建 Locator，可选从 xml_nodes 中查找父节点 resource_id"""
         parent_rid = None
+        locator_index = None
+        locator_count = None
+        peer_count = 0
+        locator_reason = "xml_nodes_unavailable"
         if xml_nodes:
             bounds = xml_node.get("bounds", [0, 0, 0, 0])
             if len(bounds) >= 4 and any(b > 0 for b in bounds):
                 parent_rid = self._find_parent_resource_id(xml_node, xml_nodes)
-        return NodeLocator(
+                peers = self._find_locator_peers(xml_node, xml_nodes, parent_rid)
+                peer_count = len(peers)
+                locator_index, locator_count = self._find_locator_peer_index(xml_node, xml_nodes, parent_rid, peers=peers)
+                if peer_count == 0:
+                    locator_reason = "no_peer"
+                elif peer_count == 1:
+                    locator_reason = "unique_no_index"
+                elif peer_count > 3:
+                    locator_reason = f"peer_gt3({peer_count})"
+                elif locator_index is None:
+                    locator_reason = f"peer_{peer_count}_index_unresolved"
+                else:
+                    locator_reason = f"peer_{peer_count}_index_assigned"
+            else:
+                locator_reason = "invalid_bounds"
+        locator = NodeLocator(
             resource_id=xml_node.get("resource_id"),
             text=xml_node.get("text"),
             content_desc=xml_node.get("content_desc"),
             class_name=xml_node.get("class_name") or xml_node.get("class"),
             parent_resource_id=parent_rid,
+            locator_index=locator_index,
+            locator_count=locator_count,
             bounds=tuple(xml_node.get("bounds", [0, 0, 0, 0]))
         )
+        self.log("debug", "[locator][build]", {
+            "category": "binding",
+            "stage": "locator_build",
+            "rid": (locator.resource_id or "").split("/")[-1],
+            "text": (locator.text or "")[:24],
+            "desc": (locator.content_desc or "")[:24],
+            "class": (locator.class_name or "").split(".")[-1],
+            "parent_rid": (locator.parent_resource_id or "").split("/")[-1] if locator.parent_resource_id else "",
+            "peer_count": peer_count,
+            "locator_index": locator.locator_index,
+            "locator_count": locator.locator_count,
+            "reason": locator_reason,
+        })
+        return locator
+
+    @staticmethod
+    def _norm_str(v: str) -> str:
+        return (v or "").strip().lower()
+
+    def _locator_identity_tuple(self, node: Dict, parent_rid: Optional[str]) -> Tuple[str, str, str, str, str]:
+        rid = self._norm_str((node.get("resource_id") or "").split("/")[-1])
+        txt = self._norm_str(node.get("text") or "")
+        desc = self._norm_str(node.get("content_desc") or "")
+        cls = self._norm_str((node.get("class_name") or node.get("class") or "").split(".")[-1])
+        pid = self._norm_str((parent_rid or "").split("/")[-1])
+        return rid, txt, desc, cls, pid
+
+    def _find_locator_peers(
+        self,
+        child_node: Dict,
+        xml_nodes: List[Dict],
+        parent_rid: Optional[str],
+    ) -> List[Dict]:
+        target = self._locator_identity_tuple(child_node, parent_rid)
+        peers: List[Dict] = []
+        for node in xml_nodes:
+            if not node.get("clickable", False):
+                continue
+            b = node.get("bounds", [0, 0, 0, 0])
+            if len(b) < 4:
+                continue
+            pr = self._find_parent_resource_id(node, xml_nodes)
+            if self._locator_identity_tuple(node, pr) == target:
+                peers.append(node)
+        return peers
+
+    def _find_locator_peer_index(
+        self,
+        child_node: Dict,
+        xml_nodes: List[Dict],
+        parent_rid: Optional[str],
+        peers: Optional[List[Dict]] = None,
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        基于“共享同一 locator”的节点集合计算 index/count。
+        仅在 2<=count<=3 时返回（index, count），否则返回 (None, None)。
+        """
+        peers = peers if peers is not None else self._find_locator_peers(child_node, xml_nodes, parent_rid)
+
+        count = len(peers)
+        if count < 2 or count > 3:
+            return None, None
+
+        peers.sort(key=lambda n: (n["bounds"][1], n["bounds"][0], n["bounds"][3], n["bounds"][2]))
+        for idx, n in enumerate(peers):
+            if n is child_node:
+                return idx, count
+
+        cb = child_node.get("bounds", [0, 0, 0, 0])
+        for idx, n in enumerate(peers):
+            if n.get("bounds", [0, 0, 0, 0]) == cb:
+                return idx, count
+        return None, None
 
     def _find_parent_resource_id(self, child_node: Dict, xml_nodes: List[Dict]) -> Optional[str]:
         """从 xml_nodes 中找到包含 child_node 的最小父节点的 resource_id"""
@@ -1691,12 +1827,27 @@ NAV|100|2200|首页|tab|home
                 # 用 XML 信息更新 locator
                 nav.locator = self._create_locator_from_xml(xml_node, xml_nodes)
                 new_center = nav.locator.click_point()
-                self.log("info", f"    ✓ VLM「{nav.name}」({vlm_x},{vlm_y}) → XML「{xml_text}」{new_center} [{match_reason}]")
+                idx_hint = ""
+                if nav.locator.locator_count is not None and nav.locator.locator_index is not None:
+                    idx_hint = f" | lidx={nav.locator.locator_index}/{nav.locator.locator_count}"
+                self.log("info", f"    ✓ VLM「{nav.name}」({vlm_x},{vlm_y}) → XML「{xml_text}」{new_center} [{match_reason}]{idx_hint}")
                 enriched.append(nav)
             else:
                 weak_locator = not (nav.locator.resource_id or nav.locator.text or nav.locator.content_desc)
                 weak_hint = " | weak_locator(identity sparse)" if weak_locator else ""
-                self.log("warn", f"    ✗ {nav.name}: VLM({vlm_x},{vlm_y}) bind_failed reason={match_reason}{weak_hint}")
+                self.log("warn", f"    ✗ {nav.name}: VLM({vlm_x},{vlm_y}) bind_failed reason={match_reason}{weak_hint}", {
+                    "category": "binding",
+                    "stage": "bind_failed",
+                    "name": nav.name,
+                    "vlm_point": [vlm_x, vlm_y],
+                    "reason": match_reason,
+                    "seed_locator": {
+                        "rid": (nav.locator.resource_id or "").split("/")[-1] if nav.locator.resource_id else "",
+                        "text": (nav.locator.text or "")[:24],
+                        "desc": (nav.locator.content_desc or "")[:24],
+                        "class": (nav.locator.class_name or "").split(".")[-1] if nav.locator.class_name else "",
+                    },
+                })
 
         self.log("info", f"  匹配结果: {len(enriched)}/{len(nav_nodes)} 个节点")
         return enriched

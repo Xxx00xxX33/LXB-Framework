@@ -1,4 +1,4 @@
-# LXB Server 部署指南
+﻿# LXB Server 部署指南
 
 ## 📦 快速开始
 
@@ -132,8 +132,8 @@ adb logcat | findstr LXB
 ## 📝 协议说明
 
 参考文档：
-- `docs/LXB-Link.md` - 协议规范
-- `docs/LXB-Server.md` - 服务器架构
+- `docs/zh/lxb_link.md` - 协议规范
+- `docs/zh/lxb_server.md` - 服务器架构
 
 ---
 

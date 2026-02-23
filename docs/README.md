@@ -1,13 +1,8 @@
-﻿# Docs Index
+﻿# Docs (Legacy Entry)
 
-## Active Docs
+当前维护文档已迁移到双语目录：
 
-- `AUTO_MAP_BUILDER.md` - current map-building strategy and practical constraints.
-- `CORTEX_ROUTE_THEN_ACT.md` - route-first then VLM-act runtime design.
+- 中文：[`docs/zh/README.md`](zh/README.md)
+- English: [`docs/en/README.md`](en/README.md)
 
-## Legacy Specs
-
-- `LXB-Link.md` - large protocol spec (historical/low-level reference).
-- `LXB-Server.md` - Android server architecture spec (historical reference).
-
-If you are implementing new product behavior, start from the active docs first.
+旧路径保留用于兼容历史链接，不再作为主维护入口。
