@@ -3784,4 +3784,4 @@ if __name__ == '__main__':
     print("按 Ctrl+C 停止服务")
     print("=" * 60)
 
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)

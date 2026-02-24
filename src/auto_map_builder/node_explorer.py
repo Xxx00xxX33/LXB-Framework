@@ -602,10 +602,10 @@ NAV|x|y|节点名称|类型|目标页面ID
 </反思>
 <最终输出>
 PAGE|forum_list|贴吧列表|帖子浏览|下拉刷新
-NAV|50|100|返回|back|prev
-NAV|100|2200|首页|tab|home
-NAV|500|2200|进吧|tab|forums
-NAV|900|2200|消息|tab|message
+NAV|50|50|返回|back|prev
+NAV|100|950|首页|tab|home
+NAV|500|950|进吧|tab|forums
+NAV|900|950|消息|tab|message
 ```
 
 ## 示例2：电商首页（如淘宝/京东）
@@ -621,12 +621,12 @@ NAV|900|2200|消息|tab|message
 </反思>
 <最终输出>
 PAGE|home|首页|电商聚合页|搜索,功能入口
-NAV|540|100|搜索|input|search
-NAV|900|100|扫一扫|jump|scan
-NAV|150|400|充值中心|jump|recharge
-NAV|100|2200|首页|tab|home
-NAV|500|2200|购物车|tab|cart
-NAV|900|2200|我的|tab|profile
+NAV|500|50|搜索|input|search
+NAV|900|50|扫一扫|jump|scan
+NAV|150|200|充值中心|jump|recharge
+NAV|100|950|首页|tab|home
+NAV|500|950|购物车|tab|cart
+NAV|900|950|我的|tab|profile
 ```
 
 ## 示例3：有遮挡弹窗
@@ -638,9 +638,9 @@ NAV|900|2200|我的|tab|profile
 检测到中央弹窗遮挡，优先输出POPUP，保留主要Tab作为备选。
 </反思>
 <最终输出>
-POPUP|540|1500|update|更新弹窗-以后再说
+POPUP|500|600|update|更新弹窗-以后再说
 PAGE|home|首页|首页内容|无
-NAV|100|2200|首页|tab|home
+NAV|100|950|首页|tab|home
 ```
 
 现在开始分析。'''
@@ -678,6 +678,7 @@ NAV|100|2200|首页|tab|home
 
         self._screen_width = 1080
         self._screen_height = 2400
+        self._coord_probe: dict = {}   # VLM 坐标空间校准结果
 
         self._stats = {
             "total_actions": 0,
@@ -860,6 +861,108 @@ NAV|100|2200|首页|tab|home
 
     # === 设备操作 ===
 
+    def _build_coord_probe_image(self, width: int, height: int) -> bytes:
+        """生成四角彩色标记的校准图（黑底，L形角标）"""
+        from PIL import Image, ImageDraw
+        import io as _io
+        img = Image.new("RGB", (int(width), int(height)), (0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        arm = max(48, min(width, height) // 7)
+        thick = max(6, arm // 8)
+        draw.rectangle([0, 0, arm, thick], fill=(255, 0, 0))
+        draw.rectangle([0, 0, thick, arm], fill=(255, 0, 0))
+        draw.rectangle([width - arm - 1, 0, width - 1, thick], fill=(0, 255, 0))
+        draw.rectangle([width - thick - 1, 0, width - 1, arm], fill=(0, 255, 0))
+        draw.rectangle([0, height - thick - 1, arm, height - 1], fill=(0, 100, 255))
+        draw.rectangle([0, height - arm - 1, thick, height - 1], fill=(0, 100, 255))
+        draw.rectangle([width - arm - 1, height - thick - 1, width - 1, height - 1], fill=(255, 220, 0))
+        draw.rectangle([width - thick - 1, height - arm - 1, width - 1, height - 1], fill=(255, 220, 0))
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _probe_coordinate_space(self) -> None:
+        """向 VLM 发送校准图，确定其原生坐标范围，结果存入 self._coord_probe"""
+        try:
+            image_bytes = self._build_coord_probe_image(1000, 1000)
+            prompt = (
+                "Coordinate Calibration Task.\n"
+                "You are given a synthetic image with black background and four colored corner markers:\n"
+                "- top-left: RED\n"
+                "- top-right: GREEN\n"
+                "- bottom-left: BLUE\n"
+                "- bottom-right: YELLOW\n"
+                "Return ONLY JSON with this exact schema:\n"
+                '{"tl":[x,y],"tr":[x,y],"bl":[x,y],"br":[x,y]}\n'
+                "Rules:\n"
+                "1) Output numbers only.\n"
+                "2) Do NOT add markdown.\n"
+                "3) Use your native coordinate space (do NOT convert on purpose).\n"
+                "4) For each corner marker, return the point closest to the actual screen corner.\n"
+                "5) Be precise; this is for coordinate range calibration.\n"
+            )
+            raw = self.vlm._call_api(image_bytes, prompt)
+            # 解析四角坐标
+            import json as _json, re as _re
+            text = (raw or "").strip()
+            obj = None
+            try:
+                obj = _json.loads(text)
+            except Exception:
+                m = _re.search(r"\{[\s\S]*\}", text)
+                if m:
+                    try:
+                        obj = _json.loads(m.group(0))
+                    except Exception:
+                        pass
+            if not isinstance(obj, dict):
+                self.log("warn", f"坐标校准失败：无法解析响应 ({text[:200]})")
+                return
+            points = {}
+            for k in ("tl", "tr", "bl", "br"):
+                v = obj.get(k)
+                if not isinstance(v, (list, tuple)) or len(v) < 2:
+                    self.log("warn", f"坐标校准失败：缺少角点 {k}")
+                    return
+                points[k] = (float(v[0]), float(v[1]))
+
+            x_min = (points["tl"][0] + points["bl"][0]) / 2.0
+            x_max = (points["tr"][0] + points["br"][0]) / 2.0
+            y_min = (points["tl"][1] + points["tr"][1]) / 2.0
+            y_max = (points["bl"][1] + points["br"][1]) / 2.0
+            self._coord_probe = {
+                "x_min": x_min, "x_max": x_max,
+                "y_min": y_min, "y_max": y_max,
+            }
+            self.log("info", f"坐标校准完成: x=[{x_min:.1f},{x_max:.1f}] y=[{y_min:.1f},{y_max:.1f}]")
+        except Exception as e:
+            self.log("warn", f"坐标校准异常（将直接使用 VLM 原始坐标）: {e}")
+
+    def _map_vlm_coord(self, vlm_x: int, vlm_y: int) -> Tuple[int, int]:
+        """将 VLM 坐标映射到屏幕像素坐标（使用校准数据）"""
+        w, h = self._screen_width, self._screen_height
+        probe = self._coord_probe
+        x_min = probe.get("x_min", 0.0)
+        x_max = probe.get("x_max", 0.0)
+        y_min = probe.get("y_min", 0.0)
+        y_max = probe.get("y_max", 0.0)
+
+        # 没有有效校准 → 直接返回原始坐标
+        if x_max <= x_min or y_max <= y_min:
+            return vlm_x, vlm_y
+
+        # 如果坐标已经明显超出校准范围（本身就是像素坐标），直接使用
+        xf, yf = float(vlm_x), float(vlm_y)
+        if (xf > x_max * 1.2 or yf > y_max * 1.2) and (0 <= xf < w) and (0 <= yf < h):
+            return int(xf), int(yf)
+
+        # 仿射变换：VLM 坐标空间 → 屏幕像素
+        rx = int(round((xf - x_min) / (x_max - x_min) * (w - 1)))
+        ry = int(round((yf - y_min) / (y_max - y_min) * (h - 1)))
+        rx = max(0, min(w - 1, rx))
+        ry = max(0, min(h - 1, ry))
+        return rx, ry
+
     def _get_screen_size(self):
         try:
             ok, w, h, _ = self.client.get_screen_size()
@@ -880,27 +983,45 @@ NAV|100|2200|首页|tab|home
             pass
         return ""
 
-    def _screenshot(self) -> Optional[bytes]:
-        try:
-            data = self.client.request_screenshot()
-            # 检查截图实际尺寸
-            if data and HAS_PIL:
-                from PIL import Image
-                img = Image.open(BytesIO(data))
-                img_w, img_h = img.size
-                if img_w != self._screen_width or img_h != self._screen_height:
-                    self.log("warn", f"截图尺寸 ({img_w}x{img_h}) != 屏幕尺寸 ({self._screen_width}x{self._screen_height})")
-                    # 更新为截图的实际尺寸（VLM 看到的是截图）
-                    self._screen_width, self._screen_height = img_w, img_h
-            return data
-        except Exception as e:
-            self.log("error", f"截图失败: {e}")
-            return None
+    def _screenshot(self, retries: int = 2) -> Optional[bytes]:
+        for attempt in range(retries + 1):
+            try:
+                data = self.client.request_screenshot()
+                # 检查截图实际尺寸
+                if data and HAS_PIL:
+                    from PIL import Image
+                    img = Image.open(BytesIO(data))
+                    img_w, img_h = img.size
+                    if img_w != self._screen_width or img_h != self._screen_height:
+                        self.log("warn", f"截图尺寸 ({img_w}x{img_h}) != 屏幕尺寸 ({self._screen_width}x{self._screen_height})")
+                        self._screen_width, self._screen_height = img_w, img_h
+                return data
+            except Exception as e:
+                # drain 脏帧，防止污染下一条命令（go_home 等）
+                try:
+                    self.client._transport.reset_runtime_state(reset_seq=False)
+                except Exception:
+                    pass
+                if attempt < retries:
+                    # 设备 UI 线程可能繁忙（H5/WebView 页面加载中），等待后重试
+                    wait = 3.0 * (attempt + 1)
+                    self.log("warn", f"截图失败（attempt {attempt + 1}/{retries + 1}），等待 {wait:.0f}s 后重试: {e}")
+                    time.sleep(wait)
+                else:
+                    self.log("error", f"截图失败（已重试 {retries} 次，放弃）: {e}")
+        return None
 
     def _dump_actions(self) -> List[Dict]:
         try:
             return self.client.dump_actions().get("nodes", [])
-        except:
+        except Exception as e:
+            # WebView/H5 页面或设备繁忙时 dump_actions 可能超时。
+            # 不 drain 的话，设备迟来的 ACK 帧会污染后续截图命令的 buffer。
+            try:
+                self.client._transport.reset_runtime_state(reset_seq=False)
+            except Exception:
+                pass
+            self.log("warn", f"dump_actions 失败（可能是 WebView 页面）: {e}")
             return []
 
     def _tap(self, x: int, y: int):
@@ -1181,19 +1302,7 @@ NAV|100|2200|首页|tab|home
         """
         try:
             w, h = self._screen_width, self._screen_height
-            prompt = self._PROMPT_ANALYZE.format(
-                width=w,
-                height=h,
-                bottom_y=int(h * 0.85),
-                top_y=int(h * 0.15),
-                # 示例坐标（基于实际分辨率）
-                ex1_x=int(w * 0.125),  # 底部导航第1个
-                ex1_y=int(h * 0.95),
-                ex2_x=int(w * 0.375),  # 底部导航第2个
-                ex2_y=int(h * 0.95),
-                ex3_x=int(w * 0.2),    # 顶部Tab
-                ex3_y=int(h * 0.06)
-            )
+            prompt = self._PROMPT_ANALYZE
 
             self.log("info", f"VLM 请求中 ({w}x{h}, {len(screenshot)} bytes)...")
 
@@ -1448,6 +1557,7 @@ NAV|100|2200|首页|tab|home
                     try:
                         x = int(parts[1].strip())
                         y = int(parts[2].strip())
+                        x, y = self._map_vlm_coord(x, y)
                         popup_type = parts[3].strip().lower()
                         description = parts[4].strip() if len(parts) >= 5 else popup_type
                         close_locator = NodeLocator(bounds=(x, y, x, y))
@@ -1485,6 +1595,7 @@ NAV|100|2200|首页|tab|home
                     try:
                         x = int(parts[1].strip())
                         y = int(parts[2].strip())
+                        x, y = self._map_vlm_coord(x, y)
                         node_name = parts[3].strip()
                         node_type = parts[4].strip().lower()
                         target_page = parts[5].strip().lower() if len(parts) >= 6 else ""
@@ -1502,129 +1613,55 @@ NAV|100|2200|首页|tab|home
         return page_info, nav_nodes, popups, block_info
 
     def _match_xml_node_with_reason(self, vlm_x: int, vlm_y: int, vlm_desc: str, xml_nodes: List[Dict]) -> Tuple[Optional[Dict], str]:
-        """? VLM ??????? XML ????? (matched_node, reason)?"""
-        def _norm(s: str) -> str:
-            return (s or "").strip().lower()
+        """
+        用 VLM 坐标匹配最小 clickable XML 容器。
 
-        def _center(b: List[int]) -> Tuple[int, int]:
-            return ((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
-
+        策略：
+        1. 找所有包含该点的 clickable 节点，取面积最小的（叶级节点）
+        2. 没命中则各向外扩展 20px 后再试一次（VLM 坐标可能略有偏差）
+        3. 仍无结果 → None
+        """
         def _area(b: List[int]) -> int:
             return max(0, b[2] - b[0]) * max(0, b[3] - b[1])
 
-        candidates_pool: List[Dict] = []
-        total_nodes = 0
-        large_filtered = 0
-        anchor_candidates = 0
-        input_candidates = 0
+        def _smallest_containing(px: int, py: int, margin: int = 0) -> Optional[Dict]:
+            hits = []
+            for node in xml_nodes:
+                if not node.get("clickable", False):
+                    continue
+                b = node.get("bounds", [0, 0, 0, 0])
+                if len(b) < 4:
+                    continue
+                x1, y1, x2, y2 = b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin
+                if x1 <= px <= x2 and y1 <= py <= y2:
+                    hits.append(node)
+            if not hits:
+                return None
+            return min(hits, key=lambda n: _area(n.get("bounds", [0, 0, 0, 0])))
 
-        for node in xml_nodes:
-            total_nodes += 1
-            bounds = node.get("bounds", [0, 0, 0, 0])
-            if len(bounds) < 4:
-                continue
-            if self._is_large_container(node):
-                large_filtered += 1
-                continue
-            if node.get("clickable", False) and self._is_nav_anchor(node):
-                candidates_pool.append(node)
-                anchor_candidates += 1
-            elif self._is_input_field(node):
-                candidates_pool.append(node)
-                input_candidates += 1
-
-        if not candidates_pool:
-            return None, (
-                f"no_candidates(total={total_nodes}, large_filtered={large_filtered}, "
-                f"anchor={anchor_candidates}, input={input_candidates})"
-            )
-
-        desc = _norm(vlm_desc)
-        if not desc:
-            self.log("debug", "      xml match hint: empty VLM desc, rely on geometry only")
-
-        screen_area = max(1, self._screen_width * self._screen_height)
-        scored: List[Tuple[float, Dict, Dict[str, float]]] = []
-
-        for node in candidates_pool:
-            b = node.get("bounds", [0, 0, 0, 0])
-            x1, y1, x2, y2 = b
-            cx, cy = _center(b)
-            label = _norm(node.get("text") or node.get("content_desc") or "")
-            distance = ((vlm_x - cx) ** 2 + (vlm_y - cy) ** 2) ** 0.5
-            inside = 1.0 if (x1 <= vlm_x <= x2 and y1 <= vlm_y <= y2) else 0.0
-            area_ratio = _area(b) / float(screen_area)
-
-            sem_exact = 0.0
-            sem_fuzzy = 0.0
-            if desc and label:
-                if label == desc:
-                    sem_exact = 120.0
-                elif desc in label or label in desc:
-                    sem_fuzzy = 70.0
-
-            pos_inside = 55.0 * inside
-            pos_dist = max(0.0, 45.0 - (distance / 12.0))
-            y_align = max(0.0, 18.0 - (abs(cy - vlm_y) / 10.0))
-            click_bonus = 8.0 if node.get("clickable", False) else 0.0
-            input_bonus = 6.0 if self._is_input_field(node) else 0.0
-
-            area_penalty = 0.0
-            if area_ratio > 0.12:
-                area_penalty = 120.0
-            elif area_ratio > 0.06:
-                area_penalty = 60.0
-
-            score = sem_exact + sem_fuzzy + pos_inside + pos_dist + y_align + click_bonus + input_bonus - area_penalty
-            scored.append((
-                score,
-                node,
-                {
-                    "sem": sem_exact + sem_fuzzy,
-                    "inside": pos_inside,
-                    "distance": distance,
-                    "area_penalty": area_penalty,
-                }
-            ))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        for idx, (score, node, info) in enumerate(scored[:3], start=1):
+        node = _smallest_containing(vlm_x, vlm_y, margin=0)
+        if node:
             label = node.get("text") or node.get("content_desc") or node.get("resource_id") or ""
-            self.log(
-                "debug",
-                f"      match#{idx} '{vlm_desc}' -> '{label[:28]}' score={score:.1f} "
-                f"(sem={info['sem']:.1f}, inside={info['inside']:.1f}, dist={info['distance']:.0f}px, area_penalty={info['area_penalty']:.1f})"
-            )
+            self.log("debug", f"      xml match: hit(margin=0) '{vlm_desc}' -> '{label[:28]}'")
+            return node, "hit"
 
-        if not scored:
-            return None, "empty_scored_candidates"
+        node = _smallest_containing(vlm_x, vlm_y, margin=20)
+        if node:
+            label = node.get("text") or node.get("content_desc") or node.get("resource_id") or ""
+            self.log("debug", f"      xml match: hit(margin=20) '{vlm_desc}' -> '{label[:28]}'")
+            return node, "hit(margin=20)"
 
-        best_score, best_node, best_info = scored[0]
-        second_score = scored[1][0] if len(scored) > 1 else -9999.0
-        strong_semantic = best_info["sem"] >= 70.0
-        if (best_score - second_score) < 10.0 and not strong_semantic:
-            reason = (
-                f"ambiguous(best={best_score:.1f}, second={second_score:.1f}, "
-                f"sem={best_info['sem']:.1f}, dist={best_info['distance']:.0f}px)"
-            )
-            return None, reason
-
-        if best_score < 20.0:
-            reason = (
-                f"low_confidence(best={best_score:.1f}, sem={best_info['sem']:.1f}, "
-                f"inside={best_info['inside']:.1f}, dist={best_info['distance']:.0f}px, "
-                f"area_penalty={best_info['area_penalty']:.1f})"
-            )
-            return None, reason
-
-        return best_node, f"ok(score={best_score:.1f}, sem={best_info['sem']:.1f})"
+        return None, "no_containing_node"
 
     def _match_xml_node(self, vlm_x: int, vlm_y: int, vlm_desc: str, xml_nodes: List[Dict]) -> Optional[Dict]:
         node, _ = self._match_xml_node_with_reason(vlm_x, vlm_y, vlm_desc, xml_nodes)
         return node
 
-    def _create_locator_from_xml(self, xml_node: Dict, xml_nodes: List[Dict] = None) -> NodeLocator:
-        """从 XML 节点创建 Locator，可选从 xml_nodes 中查找父节点 resource_id"""
+    def _create_locator_from_xml(self, xml_node: Dict, xml_nodes: List[Dict] = None) -> Optional["NodeLocator"]:
+        """从 XML 节点创建 Locator，可选从 xml_nodes 中查找父节点 resource_id。
+
+        返回 None 表示无法构建唯一 locator（peer > 3 或 index 解不出），调用方应丢弃该节点。
+        """
         parent_rid = None
         locator_index = None
         locator_count = None
@@ -1649,6 +1686,12 @@ NAV|100|2200|首页|tab|home
                     locator_reason = f"peer_{peer_count}_index_assigned"
             else:
                 locator_reason = "invalid_bounds"
+
+        # 无法唯一定位：同类节点超过 3 个，或有同类但 index 解不出
+        if peer_count > 3 or (peer_count >= 2 and locator_index is None):
+            self.log("warn", f"    ✗ locator 无法唯一化，丢弃: reason={locator_reason}")
+            return None
+
         locator = NodeLocator(
             resource_id=xml_node.get("resource_id"),
             text=xml_node.get("text"),
@@ -1824,8 +1867,12 @@ NAV|100|2200|首页|tab|home
             xml_node, match_reason = self._match_xml_node_with_reason(vlm_x, vlm_y, nav.name, xml_nodes)
             if xml_node:
                 xml_text = xml_node.get("text") or xml_node.get("content_desc") or ""
-                # 用 XML 信息更新 locator
-                nav.locator = self._create_locator_from_xml(xml_node, xml_nodes)
+                # 用 XML 信息更新 locator，构建不出唯一 locator 则丢弃
+                new_locator = self._create_locator_from_xml(xml_node, xml_nodes)
+                if new_locator is None:
+                    self.log("warn", f"    ✗ {nav.name}: VLM({vlm_x},{vlm_y}) locator_not_unique, discard")
+                    continue
+                nav.locator = new_locator
                 new_center = nav.locator.click_point()
                 idx_hint = ""
                 if nav.locator.locator_count is not None and nav.locator.locator_index is not None:
@@ -1933,36 +1980,39 @@ NAV|100|2200|首页|tab|home
 
         return enriched
 
-    def _handle_popups(self, popups: List[PopupInfo], xml_nodes: List[Dict], current_page: str):
+    def _handle_popups(self, popups: List[PopupInfo], xml_nodes: List[Dict], current_page: str, dismiss: bool = True):
         """
-        处理弹窗：点击关闭并记录到 map
+        处理弹窗：融合构建 Locator 并记录到 map，可选是否立即关闭。
 
         Args:
             popups: VLM 识别的弹窗列表
             xml_nodes: 当前页面的 XML 节点
             current_page: 当前页面ID
+            dismiss: True → 立即 tap 关闭按钮（用于首页弹窗）；
+                     False → 只记录 Locator，不操作设备（用于导航中途弹窗，
+                             后续由 _check_and_dismiss_popups 在 XML 扫描时处理）
         """
         if not popups:
             return
 
         self.log("info", f"  检测到 {len(popups)} 个弹窗/广告")
 
-        # 用 XML 丰富弹窗定位器
+        # 用 XML 丰富弹窗定位器（坐标 → 精确 Locator）
         enriched_popups = self._enrich_popup_locators(popups, xml_nodes)
 
         for popup in enriched_popups:
             popup.first_seen_page = current_page
 
-            self.log("info", f"    关闭弹窗: {popup.popup_type} - {popup.description}")
+            if dismiss:
+                self.log("info", f"    关闭弹窗: {popup.popup_type} - {popup.description}")
+                if not self._tap_node(popup.close_locator, label=f"弹窗关闭:{popup.description}"):
+                    self.log("warn", f"    弹窗「{popup.description}」无法定位关闭按钮，仅记录")
+                else:
+                    time.sleep(0.3)
+            else:
+                self.log("info", f"    记录弹窗 Locator（不关闭）: {popup.popup_type} - {popup.description}")
 
-            # 通过 find_node 定位并点击关闭按钮
-            if not self._tap_node(popup.close_locator, label=f"弹窗关闭:{popup.description}"):
-                self.log("warn", f"    弹窗「{popup.description}」无法定位关闭按钮")
-                continue
-
-            time.sleep(0.3)
-
-            # 记录到 map
+            # 无论是否关闭，都写入 map 供后续 XML 扫描匹配
             self.nav_map.add_popup(popup)
             self.log("info", f"      已记录到 map (共 {len(self.nav_map.popups)} 个弹窗)")
 
@@ -2304,6 +2354,11 @@ NAV|100|2200|首页|tab|home
             self._get_screen_size()
             self.log("info", f"屏幕: {self._screen_width}x{self._screen_height}")
 
+            # VLM 坐标空间校准（一次性）
+            self._coord_probe = {}
+            self.log("info", "VLM 坐标校准中...")
+            self._probe_coordinate_space()
+
             # 启动应用
             self.log("info", f"启动应用: {package_name}")
             self._launch_app(package_name)
@@ -2509,6 +2564,46 @@ NAV|100|2200|首页|tab|home
                 new_xml = self._dump_actions()
                 post_click_activity = self._safe_activity()
 
+                # ============================================================
+                # WebView / H5 快速路径：dump 返回空 → 跳过 XML 检查，
+                # 仅做截图 + 语义分析，记录页面跳转但不入队子节点。
+                # ============================================================
+                if not new_xml:
+                    self.log("info", f"  dump_actions 返回空（WebView/H5 页面），仅记录语义")
+                    new_screenshot = self._screenshot()
+                    if new_screenshot:
+                        new_page, _, _, _ = self._analyze_page(new_screenshot)
+                        new_path = task.path + [task.locator]
+                        if new_page:
+                            target_page_id = self._unique_target_page_id(
+                                new_page.page_id,
+                                task.from_page,
+                                task.name,
+                                task.locator,
+                            )
+                            self.nav_map.add_page(self._clone_page_with_id(new_page, target_page_id))
+                            self.log("info", f"  ?? {new_page.name} ({target_page_id}) [WebView-semantic]")
+                        else:
+                            target_page_id = self._unique_target_page_id(
+                                task.target_page or "unknown",
+                                task.from_page,
+                                task.name,
+                                task.locator,
+                            )
+                            self.log("info", f"  ?? {target_page_id} [WebView-semantic, no page]")
+                        trans = Transition(
+                            from_page=task.from_page,
+                            to_page=target_page_id,
+                            node_name=task.name,
+                            node_type=task.node_type,
+                            locator=task.locator,
+                        )
+                        self.nav_map.add_transition(trans)
+                        with self._realtime_lock:
+                            self._realtime["current_screenshot"] = base64.b64encode(new_screenshot).decode()
+                            self._realtime["last_action"] = f"{task.name} → {target_page_id} [WebView]"
+                    continue
+
                 # 检查已知 Block 页面
                 known_block = self._check_for_known_blocks(new_xml)
                 if known_block:
@@ -2599,16 +2694,14 @@ NAV|100|2200|首页|tab|home
                         continue
 
                     # ============================================================
-                    # 检测到新弹窗（VLM 发现的）→ 记录 + 关闭 + 重新探索该节点
+                    # 检测到新弹窗（VLM 发现的）→ 记录 Locator + 重新探索该节点
+                    # 不在此处关闭弹窗，也不重启应用。
+                    # 下次重新探索 nodeA 时，_check_and_dismiss_popups 会在
+                    # dump_actions XML 扫描阶段匹配到该弹窗并自动关闭。
                     # ============================================================
                     if new_popups:
-                        self.log("info", f"  VLM 检测到 {len(new_popups)} 个新弹窗，记录并关闭")
-                        self._handle_popups(new_popups, new_xml, task.from_page)
-
-                        # 重启应用并重新探索该节点
-                        self.log("info", f"  重启应用并重新探索节点: {task.name}")
-                        self._launch_app(package_name)
-                        time.sleep(2)
+                        self.log("info", f"  VLM 检测到 {len(new_popups)} 个新弹窗，记录 Locator，重新探索节点: {task.name}")
+                        self._handle_popups(new_popups, new_xml, task.from_page, dismiss=False)
 
                         # 将该节点重新加入队列（移除已探索标记）
                         self.explored_keys.discard(node_key)

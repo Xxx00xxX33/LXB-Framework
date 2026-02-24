@@ -141,9 +141,6 @@ class RouteConfig:
         use_vlm_takeover: Whether to use VLM for popup recovery (default: True)
         vlm_takeover_timeout_sec: Timeout for VLM popup classification (default: 15.0)
         route_recovery_enabled: Whether to enable route recovery attempts (default: True)
-        locator_score_threshold: Minimum score for locator match (default: 45.0)
-        locator_ambiguity_delta: Required score delta to avoid ambiguity (default: 8.0)
-        hint_distance_limit_px: Max distance for hint-based matching in pixels (default: 520.0)
     """
     node_exists_retries: int = 3
     node_exists_interval_sec: float = 0.6
@@ -151,9 +148,6 @@ class RouteConfig:
     use_vlm_takeover: bool = True
     vlm_takeover_timeout_sec: float = 15.0
     route_recovery_enabled: bool = True
-    locator_score_threshold: float = 45.0
-    locator_ambiguity_delta: float = 8.0
-    hint_distance_limit_px: float = 520.0
 
 
 class MapTaskPlanner(Protocol):
@@ -915,11 +909,7 @@ class RouteThenActCortex:
             time.sleep(0.3)
             return True
 
-        if locator.bounds_hint:
-            x, y = _bounds_center(locator.bounds_hint)
-            self.client.tap(x, y)
-            time.sleep(0.3)
-            return True
+        # 不允许坐标兜底，确保跨机型可迁移性
         return False
 
     def _resolve_locator_bounds(self, locator: Locator) -> Optional[Tuple[int, int, int, int]]:
@@ -937,11 +927,6 @@ class RouteThenActCortex:
         Returns:
             Screen bounds as (left, top, right, bottom) tuple, or None if not found
         """
-        # XML-first resolve to avoid false positives from non-unique find_node matches.
-        bounds = self._resolve_locator_from_xml(locator)
-        if bounds:
-            return bounds
-
         # strict compound
         strict = _compound_conditions(locator, include_text=True)
         relaxed = _compound_conditions(locator, include_text=False)
@@ -976,149 +961,6 @@ class RouteThenActCortex:
                 continue
 
         return None
-
-    def _resolve_locator_from_xml(self, locator: Locator) -> Optional[Tuple[int, int, int, int]]:
-        """Resolve a locator using XML dump with scoring.
-
-        Scores nodes based on:
-        - Resource ID match (+65)
-        - Text match (+38 exact, +24 partial, -12 miss)
-        - Content description match (+30 exact, +16 partial, -8 miss)
-        - Class match (+16, -6 miss)
-        - IoU with hint (+44 * iou)
-        - Distance to hint center
-
-        Args:
-            locator: Locator to resolve
-
-        Returns:
-            Screen bounds as (left, top, right, bottom) tuple, or None if
-            no node meets the score threshold
-        """
-        nodes = self._dump_actions()
-        if not nodes:
-            return None
-
-        expected_rid = _tail(locator.resource_id)
-        expected_text = (locator.text or "").strip().lower()
-        expected_desc = (locator.content_desc or "").strip().lower()
-        expected_class = _class_leaf(locator.class_name)
-        hint = locator.bounds_hint
-
-        scored: List[Tuple[float, Tuple[int, int, int, int], Dict[str, Any]]] = []
-        for node in nodes:
-            bounds = _node_bounds(node)
-            if not bounds:
-                continue
-
-            score = 0.0
-            hard_miss = False
-
-            node_rid = _tail(node.get("resource_id"))
-            node_text = str(node.get("text") or "").strip().lower()
-            node_desc = str(node.get("content_desc") or "").strip().lower()
-            node_class = _class_leaf(node.get("class"))
-
-            if expected_rid:
-                if node_rid == expected_rid:
-                    score += 65.0
-                else:
-                    hard_miss = True
-
-            if expected_text:
-                if node_text == expected_text:
-                    score += 38.0
-                elif expected_text in node_text or node_text in expected_text:
-                    score += 24.0
-                else:
-                    score -= 12.0
-
-            if expected_desc:
-                if node_desc == expected_desc:
-                    score += 30.0
-                elif expected_desc in node_desc or node_desc in expected_desc:
-                    score += 16.0
-                else:
-                    score -= 8.0
-
-            if expected_class:
-                if node_class == expected_class:
-                    score += 16.0
-                else:
-                    score -= 6.0
-
-            if hint:
-                iou = _iou(hint, bounds)
-                score += iou * 44.0
-                hx, hy = _bounds_center(hint)
-                bx, by = _bounds_center(bounds)
-                dist = ((hx - bx) ** 2 + (hy - by) ** 2) ** 0.5
-                score += max(0.0, 30.0 - dist / 18.0)
-
-                # If locator features are weak, reject far-away candidates.
-                if not (expected_rid or expected_text or expected_desc) and dist > self.config.hint_distance_limit_px:
-                    hard_miss = True
-
-            if hard_miss:
-                continue
-
-            scored.append(
-                (
-                    score,
-                    bounds,
-                    {
-                        "rid": node_rid,
-                        "text": node_text[:50],
-                        "class": node_class,
-                    },
-                )
-            )
-
-        if not scored:
-            return None
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        best_score, best_bounds, best_info = scored[0]
-
-        threshold = self.config.locator_score_threshold
-        if expected_rid:
-            threshold = min(threshold, 35.0)
-        elif expected_text or expected_desc:
-            threshold = min(threshold, 40.0)
-        elif hint:
-            threshold = max(threshold, 50.0)
-
-        if best_score < threshold:
-            self._log(
-                "route",
-                "locator_low_confidence",
-                result="fail",
-                score=round(best_score, 2),
-                threshold=threshold,
-            )
-            return None
-
-        if len(scored) > 1:
-            second_score = scored[1][0]
-            if (best_score - second_score) < self.config.locator_ambiguity_delta:
-                self._log(
-                    "route",
-                    "locator_ambiguous",
-                    result="fail",
-                    best_score=round(best_score, 2),
-                    second_score=round(second_score, 2),
-                )
-                return None
-
-        self._log(
-            "route",
-            "locator_resolved_xml",
-            result="ok",
-            score=round(best_score, 2),
-            rid=best_info["rid"],
-            node_class=best_info["class"],
-        )
-        return best_bounds
 
     # ----------------------------
     # Low-level data
@@ -1375,34 +1217,6 @@ def _node_bounds(node: Dict[str, Any]) -> Optional[Tuple[int, int, int, int]]:
     if b[2] <= b[0] or b[3] <= b[1]:
         return None
     return b
-
-
-def _tail(value: Optional[str]) -> str:
-    """Extract the tail component from a resource ID string.
-
-    Args:
-        value: Resource ID like "com.app:id/button"
-
-    Returns:
-        Tail component like "button" in lowercase, or empty string
-    """
-    if not value:
-        return ""
-    return str(value).split("/")[-1].strip().lower()
-
-
-def _class_leaf(value: Optional[str]) -> str:
-    """Extract the leaf class name from a fully qualified class name.
-
-    Args:
-        value: Class name like "android.widget.Button"
-
-    Returns:
-        Leaf class name like "button" in lowercase, or empty string
-    """
-    if not value:
-        return ""
-    return str(value).split(".")[-1].strip().lower()
 
 
 def _extract_json_object(text: str) -> Dict[str, Any]:
