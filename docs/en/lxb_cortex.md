@@ -1,417 +1,293 @@
 # LXB-Cortex
 
 ## 1. Scope
-`LXB-Cortex` provides a route-then-act runtime: route to target page first, then execute task actions.
+LXB-Cortex implements Route-Then-Act automation: route to target page first using navigation map, then execute task actions with VLM guidance.
 
 ## 2. Architecture
-- Code path: `src/cortex`
-- Main modules: `route_then_act.py`, `fsm_runtime.py`
-- Dependencies: map outputs from `LXB-MapBuilder` and device APIs from `LXB-Link`
-
-### System Architecture
+Code directory: `src/cortex/`
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     User Task Input                              │
-│                 "Open settings and enable WiFi"                  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              v
-┌─────────────────────────────────────────────────────────────────┐
-│                      Phase 1: Planning                           │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
-│  │ App Resolve  │ -> │ Route Plan  │ -> │  Target ID   │      │
-│  │(Select App)  │    │(Plan Target) │    │(Target Page) │      │
-│  └──────────────┘    └──────────────┘    └──────────────┘      │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              v
-┌─────────────────────────────────────────────────────────────────┐
-│                      Phase 2: Routing                            │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
-│  │   BFS Path   │ -> │  Route Replay│ -> │ Page Arrived │      │
-│  │(Path Finder) │    │(Exec Route)  │    │(At Target)   │      │
-│  └──────────────┘    └──────────────┘    └──────────────┘      │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐    │
-│  │              Route Recovery (Route Recovery)          │    │
-│  │  - Popup Detection (Pop-up Detection)                 │    │
-│  │  - VLM Takeover (VLM-based Recovery)                  │    │
-│  │  - App Restart (Application Restart)                  │    │
-│  └──────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              v
-┌─────────────────────────────────────────────────────────────────┐
-│                      Phase 3: Action Execution                   │
-│  ┌──────────────────────────────────────────────────────┐    │
-│  │              FSM Engine (State Machine Engine)           │    │
-│  │                                                       │    │
-│  │  ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐│    │
-│  │  │ INIT│ -> │PLAN │ -> │ROUTE│ -> │ACT  │ -> │DONE ││    │
-│  │  └─────┘    └─────┘    └─────┘    └─────┘    └─────┘│    │
-│  │                                                       │    │
-│  │  LLM Planner: Generate next action for each state     │    │
-│  │  - Context: task, page, screenshot, history            │    │
-│  │  - Structured Output: <analysis><command>             │    │
-│  └──────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              v
-┌─────────────────────────────────────────────────────────────────┐
-│                       Execution Result Output                   │
-│  {status, route_trace, command_log, lessons, ...}            │
-└─────────────────────────────────────────────────────────────────┘
+src/cortex/
+├── __init__.py
+├── fsm_runtime.py          # FSM state machine engine
+├── route_then_act.py       # Route-Then-Act core logic
+└── fsm_instruction.py      # Instruction parser
+```
+
+### Module Relationships
+
+```
+LXB-Link (Device Communication)
+       │
+       v
+LXB-Cortex
+   ├── Routing Phase   → Routing phase (deterministic navigation)
+   └── Action Phase    → Execution phase (VLM guided)
 ```
 
 ## 3. Core Flow
 
-### 3.1 Complete Execution Flow
-
-**Stage 1: INIT (Initialization)**
+### 3.1 Three-Phase Execution
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ 1. Handshake verification                                 │
-│    - client.handshake()                                │
-│    - Get device info (width, height, density)           │
-│                                                         │
-│ 2. Get current state                                      │
-│    - client.get_activity() -> (package, activity)       │
-│    - client.list_apps("user") -> application list        │
-│                                                         │
-│ 3. Coordinate space probing (optional)                   │
-│    - Generate calibration image (four corner colored markers)│
-│    - VLM recognizes four corner coordinates               │
-│    - Calculate VLM coordinate range (x_min, x_max, ...)   │
-│    - Save to context.coord_probe                          │
+│ Phase 1: Planning (Planning Phase)                       │
+│                                                          │
+│  APP_RESOLVE → Select target application                │
+│  ROUTE_PLAN  → Plan target page                          │
 └─────────────────────────────────────────────────────────┘
-              │
-              v
-         APP_RESOLVE
-```
-
-**Stage 2: APP_RESOLVE (Application Selection)**
-
-```
+                         │
+                         v
 ┌─────────────────────────────────────────────────────────┐
-│ Input: User task, app candidates list                     │
-│                                                         │
-│ Process:                                                │
-│ 1. Build Prompt with:                                   │
-│    - UserTask                                          │
-│    - AppCandidates (package, name)                      │
-│    - DeviceInfo                                        │
-│    - CurrentActivity                                   │
-│                                                         │
-│ 2. LLM generates decision:                               │
-│    <app_analysis>                                      │
-│      <user_intent>Check into Tieba</user_intent>      │
-│      <candidates>com.baidu.tieba</candidates>          │
-│      <decision>Tieba matches best</decision>            │
-│    </app_analysis>                                     │
-│    <command>SET_APP com.baidu.tieba</command>          │
-│                                                         │
-│ 3. Parse command: context.selected_package = ...      │
+│ Phase 2: Routing (Routing Phase)                        │
+│                                                          │
+│  1. BFS path planning: Find shortest path from home     │
+│     to target page in navigation map                    │
+│  2. Route replay: Sequentially click nodes on path     │
+│  3. Route recovery: Handle popups, missing nodes, etc.  │
 └─────────────────────────────────────────────────────────┘
-              │
-              v
-         ROUTE_PLAN
-```
-
-**Stage 3: ROUTE_PLAN (Route Planning)**
-
-```
+                         │
+                         v
 ┌─────────────────────────────────────────────────────────┐
-│ Input: User task, selected app, page candidates         │
-│                                                         │
-│ Process:                                                │
-│ 1. Load navigation map (RouteMap)                        │
-│    - pages: {page_id: {name, features, aliases}}        │
-│    - transitions: [{from, to, locator, description}]    │
-│                                                         │
-│ 2. Build Prompt with:                                   │
-│    - SelectedPackage                                   │
-│    - PageCandidates (page_id, name, description)        │
-│                                                         │
-│ 3. LLM generates decision:                               │
-│    <route_plan_analysis>                               │
-│      <selected_app>com.baidu.tieba</selected_app>       │
-│      <target_page_candidates>home, sign</...>          │
-│      <decision>Go to home first</decision>               │
-│    </route_plan_analysis>                              │
-│    <command>ROUTE com.baidu.tieba home</command>        │
-│                                                         │
-│ 4. Target page resolution:                               │
-│    - Handle home-like targets ("", "home", "main")       │
-│    - Alias mapping                                       │
-│    - Legacy page_id compatibility                         │
+│ Phase 3: Action (Execution Phase)                       │
+│                                                          │
+│  FSM state machine loop (VISION_ACT):                    │
+│    a. Screenshot → VLM analysis → Generate action       │
+│    b. Execute action (TAP/SWIPE/INPUT/BACK)             │
+│    c. Loop detection → Prevent repeated invalid actions │
+│    d. DONE → Task complete                              │
 └─────────────────────────────────────────────────────────┘
-              │
-              v
-          ROUTING
-```
-
-**Stage 4: ROUTING**
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. Path Planning (BFS)                                        │
-│    Input: start_page, target_page, RouteMap                  │
-│    Algorithm:                                                │
-│      queue = [(start, [])]                                  │
-│      visited = {start}                                       │
-│      while queue:                                           │
-│        current, path = queue.pop(0)                          │
-│        for edge in transitions_from(current):                │
-│          if edge.to == target: return path + [edge]         │
-│          if edge.to not in visited:                          │
-│            visited.add(edge.to)                               │
-│            queue.append((edge.to, path + [edge]))            │
-│                                                              │
-│ 2. Route Replay                                               │
-│    for edge in path:                                         │
-│      a) Launch app: client.launch_app(package)              │
-│      b) Scan known interrupts (popups, blocks)              │
-│         - Close popups using predefined close_locators      │
-│         - Check block identifiers                            │
-│      c) Check node existence: _node_exists(edge.locator)    │
-│         - Retry mechanism (node_exists_retries)             │
-│         - Composite search: XML + find_node                │
-│      d) Execute tap: _tap_locator(edge.locator)            │
-│         - Prefer bounds_hint                                │
-│         - Fallback to find_node candidate center point       │
-│      e) Wait for XML stability                               │
-│                                                              │
-│ 3. Route Recovery                                            │
-│    if node_missing or tap_failed:                            │
-│      if route_recovery_enabled:                               │
-│        if _scan_known_interrupts(): resume                  │
-│        if use_vlm_takeover:                                  │
-│          kind, payload = _vlm_classify_interrupt(screenshot) │
-│          if kind == "popup": close_popup(payload)           │
-│        if fails > max_route_restarts: restart_app           │
-└─────────────────────────────────────────────────────────────────┘
-              │
-              v
-         VISION_ACT
-```
-
-**Stage 5: VISION_ACT (Vision Execution)**
-
-```
-Execute per turn (until max_vision_turns or DONE/FAIL):
-
-1. Take current screenshot
-   screenshot = client.screenshot()
-
-2. Build Prompt with:
-   - UserTask
-   - CurrentActivity (package/activity)
-   - LastCommand + SameCommandStreak
-   - RouteTrace (recently visited pages)
-   - LLMHistory (structured history)
-   - Lessons (learned insights)
-   - Screenshot (visual input)
-
-3. LLM generates structured output:
-   <vision_analysis>
-     <page_state>Current page state description</page_state>
-     <step_review>
-       Step-1: command=TAP 890 67, page_change=Entered settings
-       Step-2: command=TAP 720 420, page_change=No visible change
-     </step_review>
-     <reflection>Recent steps show same action repeatedly ineffective, should scroll</reflection>
-     <next_step_reasoning>Scroll down to expand visible area</next_step_reasoning>
-     <completion_gate>
-       <completion_claim>Only confirmed visible area</completion_claim>
-       <coverage_check>failed: still has unseen content</coverage_check>
-     </completion_gate>
-     <done_confirm>
-       <goal_match>fail</goal_match>
-       <final_decision>NOT_DONE</final_decision>
-     </done_confirm>
-   </vision_analysis>
-   <command>SWIPE 640 1600 640 1400 650</command>
-
-4. Parse and validate command
-   - Extract <command> content
-   - Verify operation is in allowed_ops
-   - Check for loops: same_command_streak >= 3 + same_activity >= 3
-
-5. Execute action
-   - TAP: Map coordinates -> probe scale -> add jitter -> execute
-   - SWIPE: Same processing -> execute swipe
-   - INPUT/WAIT/BACK: Execute or state transition
-
-6. Refresh state
-   - Refresh activity
-   - Update streak counters
-   - Collect lesson (if any)
 ```
 
 ### 3.2 FSM State Machine
 
 ```
-         ┌─────────────┐
-         │    INIT     │  Initialize device, probe coordinate space
-         └──────┬──────┘
-                │
-                v
-    ┌───────────────────────┐
-    │    APP_RESOLVE       │  LLM selects target app
-    └───────┬───────────────┘
-            │
-            v
-    ┌───────────────────────┐
-    │    ROUTE_PLAN         │  LLM plans target page
-    └───────┬───────────────┘
-            │
-            v
-    ┌───────────────────────┐
-    │      ROUTING          │  BFS pathfinding + route replay
-    └───────┬───────────────┘
-            │ Route successful
-            v
-    ┌───────────────────────┐
-    │     VISION_ACT        │  Loop executing visual actions
-    │  (with loop detection)  │
-    └───────┬───────────────┘
-            │
-            ├──> DONE ──> FINISH
-            └──> FAIL ──> FAIL
+         ┌─────────┐
+         │  INIT   │  Initialize, probe coordinate space
+         └────┬────┘
+              │
+    ┌─────────┴─────────┐
+    │   APP_RESOLVE     │  LLM selects app
+    │   ROUTE_PLAN       │  LLM plans page
+    └───┬───────────────┬─┘
+       │               │
+       │               └──> ROUTING
+       │
+       └──> ROUTING      Route to target page
+              │
+              v
+         VISION_ACT      Vision execution (loop)
+              │
+         ┌──┴──┐
+         │DONE │  Success
+         └────┘
 ```
 
-## 4. Key Interfaces & Data Shapes
+## 4. Coordinate Space Calibration
 
-### 4.1 Core Data Structures
+### 4.1 Problem Background
 
-#### RouteMap (Navigation Map)
+**Problem**: VLM output coordinates are in model's internal coordinate system, not matching device screen pixels
+
+Example:
+- VLM may return [0, 0, 1000, 1000] (normalized coordinates)
+- Device screen is [0, 0, 1080, 2400] (pixel coordinates)
+- Different VLM models have different coordinate ranges (some use 0-1000, some use 0-1)
+
+### 4.2 Calibration Image Design
+
+**Solution**: Send calibration image (four corner colored markers) → VLM recognizes → Calculate mapping range → Runtime mapping
+
+Calibration image format:
+- Black background (RGB: 0, 0, 0)
+- Four corner L-shaped colored markers (200×200 pixels)
+  - Top-left: RED (255, 0, 0)
+  - Top-right: GREEN (0, 255, 0)
+  - Bottom-right: BLUE (0, 0, 255)
+  - Bottom-left: YELLOW (255, 255, 0)
+
+### 4.3 Mathematical Model
+
+#### 4.3.1 Linear Scaling Model
+
+Uses simple linear transformation (non-Homography):
+
+$$
+P_{device} = M \times P_{vlm}
+$$
+
+Where:
+- $P_{device} = (x_{screen}, y_{screen})^T$ is screen pixel coordinate
+- $P_{vlm} = (x_{vlm}, y_{vlm})^T$ is VLM output coordinate
+- $M = \begin{bmatrix} s_x & 0 \\ 0 & s_y \end{bmatrix}$ is diagonal scaling matrix
+
+Scaling factors:
+$$
+s_x = \frac{W_{screen} - 1}{\max_x}, \quad s_y = \frac{H_{screen} - 1}{\max_y}
+$$
+
+Complete mapping formula:
+$$
+x_{screen} = \left\lfloor \frac{x_{vlm}}{\max_x} \times (W_{screen} - 1) \right\rceil
+$$
+$$
+y_{screen} = \left\lfloor \frac{y_{vlm}}{\max_y} \times (H_{screen} - 1) \right\rceil
+$$
+
+#### 4.3.2 Calibration Process
+
+**Step 1**: VLM recognizes four corner marker positions
+
+Send calibration image, VLM returns:
+$$
+C_{tl} = (x_{tl}, y_{tl}), \quad C_{tr} = (x_{tr}, y_{tr})
+$$
+$$
+C_{br} = (x_{br}, y_{br}), \quad C_{bl} = (x_{bl}, y_{bl})
+$$
+
+**Step 2**: Calculate VLM coordinate range
+
+$$
+\max_x = \max(x_{tl}, x_{tr}, x_{br}, x_{bl})
+$$
+$$
+\max_y = \max(y_{tl}, y_{tr}, y_{br}, y_{bl})
+$$
+
+**Step 3**: Runtime coordinate mapping
 
 ```python
-{
-  "package": "com.example.app",              # App package name
-  "pages": {                                    # Page definitions
-    "home": {
-      "name": "Home Page",
-      "target_aliases": ["main", "index"],   # Aliases
-      "features": ["Search bar", "Navigation"], # Feature description
-      "legacy_page_id": "home"              # Backward compatibility
-    },
-    "settings": { ... }
-  },
-  "transitions": [                              # Transition definitions
-    {
-      "from": "home",
-      "to": "settings",
-      "locator": {                             # Trigger locator
-        "text": "Settings",
-        "resource_id": "com.app:id/settings"
-      },
-      "description": "Click settings button to enter settings page",
-      "legacy_from": "home",
-      "legacy_to": "settings"
-    }
-  ],
-  "popups": [                                   # Known popups
-    {
-      "type": "ad",
-      "close_locator": {
-        "text": "Close",
-        "resource_id": "com.app:id/close"
-      },
-      "description": "Ad popup"
-    }
-  ],
-  "blocks": [                                   # Blocking states
-    {
-      "type": "loading",
-      "identifiers": ["com.app:id/progress_bar"],
-      "description": "Loading state"
-    }
-  ],
-  "metadata": {                                  # Metadata
-    "page_id_map": {"home": "home__v2"}   # Page ID mapping
-  }
-}
+def map_coordinates(raw_x, raw_y, max_x, max_y, screen_w, screen_h):
+    """
+    Map VLM coordinates to screen coordinates using linear scaling
+
+    Args:
+        raw_x, raw_y: VLM output coordinates
+        max_x, max_y: Calibrated VLM coordinate range
+        screen_w, screen_h: Screen dimensions
+
+    Returns:
+        (screen_x, screen_y): Screen pixel coordinates
+    """
+    # Linear mapping
+    screen_x = int(round((raw_x / max_x) * (screen_w - 1)))
+    screen_y = int(round((raw_y / max_y) * (screen_h - 1)))
+
+    return screen_x, screen_y
 ```
 
-#### FSMConfig (FSM Configuration)
+## 5. FSM Formal Definition
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `max_turns` | int | 30 | Maximum state transitions |
-| `max_commands_per_turn` | int | 1 | Maximum commands per turn |
-| `max_vision_turns` | int | 20 | Maximum vision/action turns |
-| `action_interval_sec` | float | 0.8 | Delay between actions (seconds) |
-| `screenshot_settle_sec` | float | 0.6 | Screenshot wait on first vision turn |
-| `tap_bind_clickable` | bool | false | Bind taps to clickable elements |
-| `tap_jitter_sigma_px` | float | 0.0 | Tap jitter standard deviation |
-| `swipe_jitter_sigma_px` | float | 0.0 | Swipe jitter standard deviation |
-| `xml_stable_interval_sec` | float | 0.3 | XML stability check interval |
-| `xml_stable_samples` | int | 4 | XML stability samples needed |
-| `xml_stable_timeout_sec` | float | 4.0 | XML stability timeout (seconds) |
-| `init_coord_probe_enabled` | bool | true | Enable coordinate probing |
+### 5.1 Quintuple Definition
 
-## 5. Failure Modes & Recovery
+Define finite state machine $M = (S, \Sigma, \delta, s_0, F)$:
 
-| Failure Type | Trigger | Recovery Strategy |
-|--------------|--------|------------------|
-| Path not found | BFS finds no path | Check map completeness, target page aliases |
-| Node unreachable | _node_exists fails | Enable route_recovery, VLM takeover |
-| Tap unresponsive | _tap_locator fails | Retry, app restart, re-route |
-| Popup interrupt | Popup/block detected | Scan known popups, VLM classify |
-| App crash | Activity disappears | Restart app, begin route again |
+- **State set** $S = \{s_{init}, s_{app\_resolve}, s_{route\_plan}, s_{routing}, s_{vision\_act}, s_{done}, s_{fail}\}$
+- **Input alphabet** $\Sigma = \{\text{CMD}, \text{RESPONSE}, \text{TIMEOUT}, \text{ERROR}, \text{DONE}, \text{FAIL}\}$
+- **Transition function** $\delta: S \times \Sigma \to S$
+- **Initial state** $s_0 = s_{init}$
+- **Accepting states** $F = \{s_{done}\}$
 
-## 6. Observability
+### 5.2 State Transition Table
 
-### Log Event Structure
+| Current State | Input Event | Next State | Action |
+|---------------|-------------|------------|--------|
+| INIT | Device ready | APP_RESOLVE | Start LLM planning |
+| APP_RESOLVE | APP selected | ROUTE_PLAN | Plan target page |
+| ROUTE_PLAN | Path determined | ROUTING | Start routing |
+| ROUTING | Route success | VISION_ACT | Start execution |
+| ROUTING | Route failure × N | FAIL | Routing failed |
+| VISION_ACT | DONE | DONE | Task complete |
+| VISION_ACT | Timeout × N | FAIL | Execution timeout |
+| VISION_ACT | Other | VISION_ACT | Continue loop |
 
-```python
-{
-  "ts": "2024-02-20T12:00:00.000Z",   # Timestamp
-  "task_id": "uuid",                   # Task ID
-  "stage": "fsm|route|exec|llm",      # Stage identifier
-  "event": "event_name",               # Event name
-  "state": "INIT|ROUTING|VISION_ACT",  # Current state
-  "prompt": "...",                     # LLM input (llm stage)
-  "response": "...",                   # LLM output (llm stage)
-  "structured": {...},                 # Structured output (llm stage)
-  "command": "TAP 500 800",            # Executed command
-  "error": "error_reason"              # Error (if failed)
-}
+### 5.3 VISION_ACT Loop Detection
+
+Define loop condition:
+$$
+\text{LoopDetected} = (c_{same} \geq 3) \land (a_{stable} \geq 3)
+$$
+
+Where:
+- $c_{same}$: Consecutive identical command execution count
+- $a_{stable}$: Activity unchange count
+
+## 6. BFS Path Planning
+
+### 6.1 Graph Model Definition
+
+Define navigation graph $G = (V, E)$:
+- **Vertex set** $V$: All pages in the app (page_id)
+- **Edge set** $E$: Transition relationships between pages
+- **Edge weights**: Each edge associated with a locator $locator(e)$
+
+### 6.2 BFS Algorithm
+
+```
+Algorithm 2: BFS Path Finding for Route-Then-Act
+Input: Graph G = (V, E), start vertex s, target vertex t
+Output: Shortest path P = [v_0, v_1, ..., v_k] where v_0 = s, v_k = t
+
+1:  if s = t then return [s]
+2:
+3:  queue ← [(s, [s])]     // (current_vertex, path_so_far)
+4:  visited ← {s}
+5:
+6:  while queue is not empty do
+7:      (v, path) ← queue.dequeue()
+8:
+9:      for each edge e ∈ out_edges(v) do
+10:         u ← e.to
+11:
+12:         if u = t then
+13:             return path + [u]
+14:         end if
+15:
+16:         if u ∉ visited then
+17:             visited ← visited ∪ {u}
+18:             queue.enqueue((u, path + [u]))
+19:         end if
+20:     end for
+21: end while
+22:
+23:  return ⊥  // No path found
 ```
 
-## 7. Configuration
+### 6.3 Cycle Handling
 
-| Configuration | Recommended Value | Description |
-|---------------|-------------------|-------------|
-| LLM Model | qwen-plus or gpt-4o | Planning model |
-| Temperature | 0.1 | Low temperature for determinism |
-| Timeout | 30 | API timeout (seconds) |
-| Route Recovery | true | Enable route recovery for production |
+**Problem**: Graph may contain cycles (A → B → A)
 
-## 8. Constraints & Compatibility
+**Solution**:
+1. `visited` set tracks visited vertices
+2. Only enqueue unvisited vertices
+3. Ensures each vertex is visited at most once
 
-### Map Quality Requirements
-- Must contain "home" or home entry point
-- Target pages must be defined in pages
-- Key route transitions must be complete
+## 7. Design Principles
 
-### LLM Capability Requirements
-- Follow structured output format
-- Understand task intent and page semantics
-- Reflection and summarization capability
+### 7.1 Routing Phase Determinism
+- Use BFS algorithm to ensure shortest path is found
+- Position based on XML hierarchy, not hardcoded coordinates
+- Path is reproducible and verifiable
 
-## 9. Current Gaps
+### 7.2 Action Phase Reflection Mechanism
+- LLM outputs structured analysis each turn (step_review, reflection)
+- Collect lessons (insights) to feed back to subsequent turns
+- Prevent repeated invalid actions (loop detection)
 
-- High-dynamic pages still challenge stable page arrival checks
-- Interrupt handling quality depends on recovery strategy tuning
-- Cross-app navigation not yet supported
-- Concurrent task execution not yet implemented
+### 7.3 Separation of Concerns
+- Routing handles reaching target page (deterministic)
+- Action handles executing specific tasks (VLM guided)
+- Failure recovery decoupled from main flow
 
-## 10. Cross References
+## 8. Code Structure
 
-- `docs/en/lxb_map_builder.md` - Map building documentation
-- `docs/en/lxb_link.md` - Device communication documentation
-- `docs/en/lxb_web_console.md` - Web console documentation
+| File | Responsibility | Key Classes/Functions |
+|------|----------------|----------------------|
+| `fsm_runtime.py` | FSM engine | `CortexFSMEngine`, `_run_vision_state`, `_probe_coordinate_space` |
+| `route_then_act.py` | Routing core | `RouteThenActCortex`, `_bfs_path`, `_execute_route` |
+| `fsm_instruction.py` | Instruction parser | `parse_instructions`, `validate_allowed` |
+
+## 9. Cross References
+- `docs/en/lxb_map_builder.md` - Map building
+- `docs/en/lxb_link.md` - Device communication
