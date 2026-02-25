@@ -32,11 +32,16 @@ from benchmark.config import (
 from benchmark.runners.base import BaseRunner, InferenceCounter, LLMClient, RunResult
 from benchmark.tasks import BenchmarkTask
 from benchmark.verification import ExternalVisualVerifier
+from benchmark.coord_calibration import get_coord_probe, map_point_by_probe
 
 _SYSTEM_PROMPT = """\
 You are navigating an Android app step by step with screenshot + semantic map.
 You may tap UI elements or press the system BACK button.
-Respond ONLY with a JSON object."""
+Respond ONLY with a JSON object and no extra text.
+Strict type rules:
+- x and y must be JSON numbers (integers), not strings.
+- x and y must be scalar values, not arrays or objects.
+- back and done must be JSON booleans."""
 
 _STEP_PROMPT = """\
 App: {app_name}
@@ -54,8 +59,12 @@ If needed, use BACK.
 Return only one JSON:
 {{"done": false, "x": <x>, "y": <y>, "reason": "<one sentence>"}}
 or
-{{"done": false, "back": true, "reason": "<one sentence>"}}"""
+{{"done": false, "back": true, "reason": "<one sentence>"}}
 
+Type constraints (MANDATORY):
+- Valid: {{"done": false, "x": 512, "y": 830, "reason": "..."}}.
+- Invalid: x/y as strings, arrays, objects, or multi-candidate lists.
+- Return exactly one action object and no prose."""
 
 def _parse_response(raw: str) -> dict[str, Any]:
     raw = re.sub(r"```(?:json)?", "", raw).strip().strip("`")
@@ -105,6 +114,11 @@ class VLMSemanticMapRunner(BaseRunner):
     MAX_STEPS = 10
 
     @staticmethod
+    def _shell_log(event: str, **kwargs: Any) -> None:
+        payload = {"事件": event, **kwargs}
+        print(f"[VLM-SEM-MAP] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+
+    @staticmethod
     def _append_structured_log(record: dict[str, Any]) -> None:
         path = Path(VLM_STRUCTURED_LOG_FILE)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,13 +153,26 @@ class VLMSemanticMapRunner(BaseRunner):
         if raw_x is None or raw_y is None:
             return None, None, meta
 
-        raw_x = cls._clamp(raw_x, 0, VLM_COORD_NORM_MAX)
-        raw_y = cls._clamp(raw_y, 0, VLM_COORD_NORM_MAX)
-        x = round(raw_x / VLM_COORD_NORM_MAX * (screen_w - 1))
-        y = round(raw_y / VLM_COORD_NORM_MAX * (screen_h - 1))
-        x = cls._clamp(x, 0, max(screen_w - 1, 0))
-        y = cls._clamp(y, 0, max(screen_h - 1, 0))
-        meta.update({"coord_mode": "normalized_0_to_1000", "tap_x": x, "tap_y": y})
+        probe = get_coord_probe()
+        if probe:
+            x, y, mode = map_point_by_probe(
+                probe=probe,
+                raw_x=float(raw_x),
+                raw_y=float(raw_y),
+                screen_w=screen_w,
+                screen_h=screen_h,
+            )
+            x = cls._clamp(x, 0, max(screen_w - 1, 0))
+            y = cls._clamp(y, 0, max(screen_h - 1, 0))
+            meta.update({"coord_mode": mode, "tap_x": x, "tap_y": y})
+        else:
+            raw_x = cls._clamp(raw_x, 0, VLM_COORD_NORM_MAX)
+            raw_y = cls._clamp(raw_y, 0, VLM_COORD_NORM_MAX)
+            x = round(raw_x / VLM_COORD_NORM_MAX * (screen_w - 1))
+            y = round(raw_y / VLM_COORD_NORM_MAX * (screen_h - 1))
+            x = cls._clamp(x, 0, max(screen_w - 1, 0))
+            y = cls._clamp(y, 0, max(screen_h - 1, 0))
+            meta.update({"coord_mode": "normalized_0_to_1000", "tap_x": x, "tap_y": y})
         return x, y, meta
 
     @staticmethod
@@ -205,8 +232,26 @@ class VLMSemanticMapRunner(BaseRunner):
             try:
                 raw = vlm.complete_with_image(_SYSTEM_PROMPT + "\n\n" + prompt, screenshot)
                 action = _parse_response(raw)
+                self._shell_log(
+                    "模型输出",
+                    任务=task.task_id,
+                    轮次=trial,
+                    步骤=step,
+                    done=bool(action.get("done", False)),
+                    back=bool(action.get("back", False)),
+                    x=action.get("x"),
+                    y=action.get("y"),
+                    原因=str(action.get("reason", ""))[:80],
+                )
             except Exception as exc:
                 error = f"parse_error_step{step}: {exc}"
+                self._shell_log(
+                    "解析失败",
+                    任务=task.task_id,
+                    轮次=trial,
+                    步骤=step,
+                    错误=str(exc),
+                )
                 break
 
             if action.get("back"):
@@ -214,7 +259,18 @@ class VLMSemanticMapRunner(BaseRunner):
                 history.append(f"step{step}:BACK({action.get('reason', '')})")
                 steps = step
                 time.sleep(STEP_PAUSE_SEC)
-                if verifier.verify(client).success:
+                verify_back = verifier.verify(client)
+                self._shell_log(
+                    "外部验收",
+                    任务=task.task_id,
+                    轮次=trial,
+                    步骤=step,
+                    成功=verify_back.success,
+                    置信度=round(verify_back.confidence, 3),
+                    观察页=verify_back.observed_page,
+                    原因=verify_back.reason,
+                )
+                if verify_back.success:
                     success = True
                     break
                 continue
@@ -223,12 +279,41 @@ class VLMSemanticMapRunner(BaseRunner):
             x, y, coord_meta = self._resolve_tap_coords(action, screen_w, screen_h)
             if x is None or y is None:
                 error = f"invalid_coords_step{step}"
+                self._shell_log(
+                    "坐标无效",
+                    任务=task.task_id,
+                    轮次=trial,
+                    步骤=step,
+                    原始x=action.get("x"),
+                    原始y=action.get("y"),
+                )
                 break
             if x == 0 and y == 0:
                 error = f"zero_coords_step{step}"
+                self._shell_log(
+                    "坐标为零",
+                    任务=task.task_id,
+                    轮次=trial,
+                    步骤=step,
+                    原始x=action.get("x"),
+                    原始y=action.get("y"),
+                )
                 break
 
             client.tap(x, y)
+            self._shell_log(
+                "点击映射",
+                任务=task.task_id,
+                轮次=trial,
+                步骤=step,
+                原始x=action.get("x"),
+                原始y=action.get("y"),
+                实际x=x,
+                实际y=y,
+                映射模式=coord_meta.get("coord_mode"),
+                屏幕宽=screen_w,
+                屏幕高=screen_h,
+            )
             history.append(f"step{step}:tap({x},{y}) {action.get('reason', '')}"[:60])
             steps = step
             self._append_structured_log(
@@ -247,6 +332,16 @@ class VLMSemanticMapRunner(BaseRunner):
 
             time.sleep(STEP_PAUSE_SEC)
             verify = verifier.verify(client)
+            self._shell_log(
+                "外部验收",
+                任务=task.task_id,
+                轮次=trial,
+                步骤=step,
+                成功=verify.success,
+                置信度=round(verify.confidence, 3),
+                观察页=verify.observed_page,
+                原因=verify.reason,
+            )
             if verify.success:
                 success = True
                 break
