@@ -27,7 +27,37 @@
 > 就把思路和实现都记录下来，希望能给同样在这个方向探索的人提供一点参考。
 >
 > 如果你是相关领域的研究者或工程师，发现了问题或者有更好的想法，
-> 欢迎开 Issue 或提 PR，非常感谢。
+> 欢迎开 Issue 或提 PR，非常感谢。求轻喷——孩子还小，怕生。
+
+---
+
+## 演示
+
+### 构建导航地图
+
+LXB-MapBuilder 自动探索 App，构建可复用的导航图。
+
+<img src="resources/map_building (speed x 5).gif" alt="地图构建（5倍速）" width="700">
+
+构建完成后可视化查看导航图结构：
+
+<img src="resources/map_visualization.gif" alt="地图可视化" width="700">
+
+### Route-Then-Act 执行流程
+
+地图构建完成后，LXB-Cortex 分三个阶段完成任务：
+
+**阶段一 — 初始化与规划**：LLM 基于 App 状态生成路由计划（纯文本，无需截图）。
+
+<img src="resources/Route-then-Act-Init-and-Planning (speed x 2).gif" alt="初始化与规划（2倍速）" width="700">
+
+**阶段二 — 路由导航**：BFS 确定性导航至目标页面，全程零 VLM 调用。
+
+<img src="resources/Route-then_act_routing(real time).gif" alt="路由导航（实时）" width="700">
+
+**阶段三 — 任务执行**：在目标页面上由 VLM 引导完成具体操作。
+
+<img src="resources/Route-then-act-acting(speed x 5)).gif" alt="任务执行（5倍速）" width="700">
 
 ---
 
@@ -48,28 +78,7 @@ LXB-Framework 是一个面向 Android 自动化的工程体系，核心目标是
 
 ## 架构
 
-```text
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ Web 控制台   │  │ Python API   │  │  示例代码    │      │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
-└─────────┼──────────────────┼──────────────────┼─────────────┘
-          │                  │                  │
-┌─────────┴──────────────────┴──────────────────┴─────────────┐
-│                     核心模块层                               │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ LXB-Cortex   │  │LXB-MapBuilder│  │  LXB-Link    │      │
-│  │   (FSM)      │  │  (VLM+XML)   │  │  (协议)      │      │
-│  └──────────────┘  └──────────────┘  └──────┬───────┘      │
-└─────────────────────────────────────────────┼───────────────┘
-                                               │
-┌─────────────────────────────────────────────┴───────────────┐
-│                    Android 设备端                             │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              LXB-Server (Shizuku 服务)               │   │
-│  │  无障碍服务 + 输入注入                                │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-```
+![LXB-Framework 架构图](resources/architecture.svg)
 
 ## 模块介绍
 
@@ -87,7 +96,7 @@ LXB-Framework 是一个面向 Android 自动化的工程体系，核心目标是
 
 - Python 3.9+
 - 已安装 Shizuku 的 Android 设备
-- VLM API 访问权限（推荐 Qwen-VL-Plus 或 GPT-4o）
+- VLM API Key（支持 OpenAI 兼容接口）
 
 ### 安装
 
@@ -100,26 +109,6 @@ cd LXB-Framework
 pip install -r requirements.txt
 ```
 
-### 基本使用
-
-```python
-from lxb_link import LXBLinkClient
-
-# 连接设备
-client = LXBLinkClient("192.168.1.100", 12345)
-client.connect()
-client.handshake()
-
-# 截图
-screenshot = client.screenshot()
-
-# 查找并点击元素
-nodes = client.find_node("设置", match_type="text")
-if nodes:
-    x, y = nodes[0]["bounds"]
-    client.tap(x, y)
-```
-
 ### 启动 Web 控制台
 
 ```bash
@@ -129,43 +118,31 @@ python app.py
 
 然后访问 `http://localhost:5000/`
 
-## 文档
-
-### 模块文档
-
-- [LXB-Link](docs/zh/lxb_link.md) - 设备通信协议
-- [LXB-Server](docs/zh/lxb_server.md) - Android 服务架构
-- [LXB-MapBuilder](docs/zh/lxb_map_builder.md) - 地图构建引擎
-- [LXB-Cortex](docs/zh/lxb_cortex.md) - Route-Then-Act 执行
-- [LXB-WebConsole](docs/zh/lxb_web_console.md) - Web 控制台界面
-
-### 指南
-
-- [快速开始指南](docs/zh/quickstart.md)
-- [配置参考](docs/zh/configuration.md)
-- [示例代码](examples/)
-
 ## 设计理念
 
 ### Route-Then-Act
 
-不是每个动作都使用 VLM，LXB-Framework 采用：
+LXB-Framework 将导航与执行彻底分离，而不是每个动作都调用 VLM：
 
-1. **构建地图**：应用导航结构的地图
-2. **确定性路由**：使用地图到达目标页面
+1. **构建地图**：自动生成 App 导航结构图
+2. **确定性路由**：BFS 寻路到目标页面，全程零 VLM 调用
 3. **任务执行**：在目标页上使用 VLM 指导执行
+
+![LXB-Cortex 状态机](resources/cortex_state_machine.svg)
 
 这种方式减少了 VLM API 调用，提高了可靠性，并实现了任务可重现性。
 
-### 检索优先定位
-
-使用语义属性（resource_id、text）而非硬编码坐标来定位元素，确保在不同设备和屏幕尺寸上的可靠性。
-
 ### VLM-XML 融合
 
-- **VLM** 提供语义理解（这是什么按钮？）
+- **VLM** 提供语义理解（这是什么元素？）
 - **XML** 提供精确定位（resource_id、bounds）
-- **融合** 两者结合实现可靠的自动化定位符
+- **融合** 通过点包含匹配将 VLM 检测结果对齐到 XML 节点
+
+![VLM-XML 融合引擎](resources/fusion_engine.svg)
+
+### 检索优先定位
+
+使用稳定的语义属性（resource_id、content description）而非硬编码坐标来定位元素，确保在不同设备和屏幕尺寸上的可靠性。
 
 ## 项目结构
 
@@ -176,6 +153,7 @@ LXB-Framework/
 │   ├── zh/                  # 中文文档
 │   └── en/                  # 英文文档
 ├── examples/                # 使用示例
+├── resources/               # 架构图与演示 GIF
 ├── src/
 │   ├── cortex/              # Route-Then-Act 引擎
 │   ├── auto_map_builder/    # 地图构建引擎
