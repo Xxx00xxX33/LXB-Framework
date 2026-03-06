@@ -11,6 +11,8 @@
 [![GitHub Stars](https://img.shields.io/github/stars/wuwei-crg/LXB-Framework.svg?style=social)](https://github.com/wuwei-crg/LXB-Framework)
 [![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](docs/en)
 
+Paper: [TechRxiv](https://doi.org/10.36227/techrxiv.177273656.63195814/v1)
+
 ---
 
 [English](README.md) | [中文文档](README.zh.md)
