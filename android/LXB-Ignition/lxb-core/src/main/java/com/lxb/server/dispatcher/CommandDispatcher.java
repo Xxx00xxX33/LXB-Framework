@@ -56,6 +56,18 @@ public class CommandDispatcher {
     public byte[] dispatch(FrameCodec.FrameInfo frame, byte[] payload) {
         SequenceTracker.FrameKey frameKey = new SequenceTracker.FrameKey(frame.seq, frame.cmd, payload);
 
+        // 0) Strong duplicate protection: if we have a cached ACK for this exact
+        //    frame fingerprint (same seq + cmd + payload hash), reuse it directly.
+        //    This handles late UDP retries that arrive AFTER a long-running
+        //    command has finished, and avoids re-executing expensive commands
+        //    like CORTEX_ROUTE_RUN twice.
+        byte[] cachedAck = ackCache.get(frameKey);
+        if (cachedAck != null) {
+            System.out.println(TAG + " Cached ACK hit, skipping re-dispatch for seq="
+                    + frame.seq + ", cmd=0x" + String.format("%02X", frame.cmd & 0xFF));
+            return cachedAck;
+        }
+
         // 1) Short-lived duplicate detection (same seq+cmd+payload fingerprint)
         if (sequenceTracker.isDuplicate(frame.seq, frame.cmd, payload)) {
             System.out.println(TAG + " Duplicate frame detected, returning cached ACK");
@@ -167,6 +179,9 @@ public class CommandDispatcher {
                     break;
                 case CommandIds.CMD_CORTEX_TRACE_PULL:
                     response = cortexFacade.handleTracePull(payload);
+                    break;
+                case CommandIds.CMD_CORTEX_ROUTE_RUN:
+                    response = cortexFacade.handleRouteRun(payload);
                     break;
 
                 default:
