@@ -103,6 +103,10 @@ public class CortexFsmEngine {
         public String pendingHistoryInstruction = "";
         public String pendingHistoryExpected = "";
 
+        // Optional guidance injected by TaskManager.
+        public String userPlaybook = "";
+        public final Map<String, Object> taskMemoryHint = new LinkedHashMap<>();
+
         public Context(String taskId) {
             this.taskId = taskId;
         }
@@ -184,6 +188,8 @@ public class CortexFsmEngine {
             String startPage,
             String traceMode,
             Integer traceUdpPort,
+            String userPlaybook,
+            Map<String, Object> taskMemoryHint,
             String taskIdOverride,
             CancellationChecker cancellationChecker
     ) {
@@ -195,6 +201,10 @@ public class CortexFsmEngine {
         ctx.rootUserTask = ctx.userTask;
         ctx.mapPath = mapPath;
         ctx.startPage = startPage;
+        ctx.userPlaybook = userPlaybook != null ? userPlaybook.trim() : "";
+        if (taskMemoryHint != null && !taskMemoryHint.isEmpty()) {
+            ctx.taskMemoryHint.putAll(taskMemoryHint);
+        }
 
         String initialPackageName = packageName != null ? packageName : "";
         ctx.selectedPackage = initialPackageName;
@@ -246,6 +256,8 @@ public class CortexFsmEngine {
 
             boolean overallSuccess = true;
             State lastState = State.FINISH;
+            boolean anyMemoryFastPathUsed = false;
+            boolean anyMemoryFastPathFallback = false;
 
             // 3) Execute each sub_task using the existing APP_RESOLVE/ROUTE_PLAN/ROUTING/VISION_ACT pipeline.
             for (int idx = 0; idx < effectiveSubTasks.size(); idx++) {
@@ -288,7 +300,35 @@ public class CortexFsmEngine {
                 subBegin.put("app_hint", st.appHint);
                 trace.event("fsm_sub_task_begin", subBegin);
 
-                state = State.APP_RESOLVE;
+                boolean memoryFastPathUsed = false;
+                boolean memoryFastPathFallbackUsed = false;
+                String fastPathPkg = resolveMemoryFastPathPackage(ctx);
+                if (!fastPathPkg.isEmpty()) {
+                    ctx.selectedPackage = fastPathPkg;
+                    boolean launchOk = launchAppForRouting(fastPathPkg);
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("task_id", ctx.taskId);
+                    m.put("index", idx);
+                    m.put("sub_task_id", st.id);
+                    m.put("package", fastPathPkg);
+                    m.put("launch_ok", launchOk);
+                    m.put("memory_summary", stringOrEmpty(ctx.taskMemoryHint.get("summary_text")));
+                    trace.event("fsm_memory_fast_path", m);
+                    if (launchOk) {
+                        memoryFastPathUsed = true;
+                        anyMemoryFastPathUsed = true;
+                        // Align with routing launch settle to reduce early vision mismatch.
+                        try {
+                            Thread.sleep(1200);
+                        } catch (InterruptedException ignored) {
+                        }
+                        state = State.VISION_ACT;
+                    } else {
+                        state = State.APP_RESOLVE;
+                    }
+                } else {
+                    state = State.APP_RESOLVE;
+                }
                 for (int step = 0; step < 30; step++) {
                     if (cancellationChecker != null && cancellationChecker.isCancelled()) {
                         ctx.error = "cancelled_by_user";
@@ -312,6 +352,30 @@ public class CortexFsmEngine {
                     }
                     if (state == State.VISION_ACT) {
                         state = runVisionActState(ctx);
+                        continue;
+                    }
+                    if (state == State.FAIL && memoryFastPathUsed && !memoryFastPathFallbackUsed) {
+                        // Fallback once to full pipeline if fast path fails.
+                        memoryFastPathFallbackUsed = true;
+                        anyMemoryFastPathFallback = true;
+                        memoryFastPathUsed = false;
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("task_id", ctx.taskId);
+                        m.put("index", idx);
+                        m.put("sub_task_id", st.id);
+                        m.put("reason", ctx.error);
+                        trace.event("fsm_memory_fast_path_fallback", m);
+                        ctx.error = "";
+                        ctx.routeResult.clear();
+                        ctx.targetPage = "";
+                        ctx.visionTurns = 0;
+                        ctx.lastCommand = "";
+                        ctx.sameCommandStreak = 0;
+                        ctx.sameActivityStreak = 0;
+                        ctx.visionHistory.clear();
+                        ctx.pendingHistoryInstruction = "";
+                        ctx.pendingHistoryExpected = "";
+                        state = State.APP_RESOLVE;
                         continue;
                     }
                     if (state == State.FINISH || state == State.FAIL) {
@@ -362,6 +426,10 @@ public class CortexFsmEngine {
             out.put("command_log", new ArrayList<>(ctx.commandLog));
             out.put("llm_history", new ArrayList<>(ctx.llmHistory));
             out.put("lessons", new ArrayList<>(ctx.lessons));
+            out.put("guidance_playbook_used", !ctx.userPlaybook.isEmpty());
+            out.put("guidance_memory_used", !ctx.taskMemoryHint.isEmpty());
+            out.put("memory_fast_path_used", anyMemoryFastPathUsed);
+            out.put("memory_fast_path_fallback", anyMemoryFastPathFallback);
             if (ctx.error != null && !ctx.error.isEmpty()) {
                 out.put("reason", ctx.error);
             }
@@ -483,6 +551,29 @@ public class CortexFsmEngine {
         // Next: task decomposition (v2). Even if decomposition fails, the FSM will
         // fall back to the old single-task pipeline.
         return State.TASK_DECOMPOSE;
+    }
+
+    /**
+     * Decide whether memory fast path can be used for current sub_task.
+     * Rules:
+     * - Requires non-empty taskMemoryHint.
+     * - Uses selected package if already decided.
+     * - If selected package is empty, falls back to memory package_name.
+     * - If both exist but conflict, disable fast path for safety.
+     */
+    private String resolveMemoryFastPathPackage(Context ctx) {
+        if (ctx.taskMemoryHint.isEmpty()) {
+            return "";
+        }
+        String selected = ctx.selectedPackage != null ? ctx.selectedPackage.trim() : "";
+        String memoryPkg = stringOrEmpty(ctx.taskMemoryHint.get("package_name"));
+        if (!selected.isEmpty()) {
+            if (!memoryPkg.isEmpty() && !selected.equals(memoryPkg)) {
+                return "";
+            }
+            return selected;
+        }
+        return memoryPkg;
     }
 
     /**
@@ -1881,17 +1972,23 @@ public class CortexFsmEngine {
 
         // Build full VISION_ACT prompt, extended with current sub_task contract when available.
         String prompt = buildVisionPrompt(ctx);
-        Map<String, Object> promptEv = new LinkedHashMap<>();
-        promptEv.put("task_id", ctx.taskId);
-        promptEv.put("state", State.VISION_ACT.name());
-        promptEv.put("prompt", prompt);
-        trace.event("llm_prompt_vision_act", promptEv);
-
+        final int maxVisionParseAttempts = 3;
         String raw = "";
+        String normalized = "";
+        String observing = "";
+        String observeResult = "";
+        String judging = "";
+        String judgeResult = "";
+        String thinking = "";
+        String actionText = "";
+        String expectedText = "";
+        String commandText = "";
+        String lastParseError = "";
+        List<Instruction> commands = null;
+
+        LlmConfig cfg;
         try {
-            LlmConfig cfg = LlmConfig.loadDefault();
-            // Send multimodal request (prompt + screenshot) via chat/completions.
-            raw = llmClient.chatOnce(cfg, null, prompt, screenshotPng);
+            cfg = LlmConfig.loadDefault();
         } catch (Exception e) {
             ctx.error = "planner_call_failed:VISION_ACT:" + e;
             Map<String, Object> fail = new LinkedHashMap<>();
@@ -1902,27 +1999,95 @@ public class CortexFsmEngine {
             return State.FAIL;
         }
 
-        Map<String, Object> respEv = new LinkedHashMap<>();
-        respEv.put("task_id", ctx.taskId);
-        respEv.put("state", State.VISION_ACT.name());
-        String snippet = raw != null && raw.length() > 4000 ? raw.substring(0, 4000) + "..." : raw;
-        respEv.put("response", snippet != null ? snippet : "");
-        trace.event("llm_response_vision_act", respEv);
+        for (int attempt = 1; attempt <= maxVisionParseAttempts; attempt++) {
+            String attemptPrompt = prompt;
+            if (attempt > 1) {
+                StringBuilder retryPrompt = new StringBuilder(prompt);
+                retryPrompt.append("\n\n[FORMAT_RETRY]\n");
+                retryPrompt.append("Previous response could not be parsed: ").append(lastParseError).append("\n");
+                retryPrompt.append("Return exactly the required 8 tags in order, and provide one valid DSL command in <command>.");
+                attemptPrompt = retryPrompt.toString();
+            }
 
-        // Parse the agreed regex-friendly output tags.
-        String observing = extractTagText(raw, "Observing");
-        String observeResult = extractTagText(raw, "Ovserve_result");
-        String judging = extractTagText(raw, "Judging");
-        String judgeResult = extractTagText(raw, "Judge_result");
-        String thinking = extractTagText(raw, "Thinking");
-        String actionText = extractTagText(raw, "action");
-        String expectedText = extractTagText(raw, "expected");
-        String commandText = extractTagText(raw, "command");
+            Map<String, Object> promptEv = new LinkedHashMap<>();
+            promptEv.put("task_id", ctx.taskId);
+            promptEv.put("state", State.VISION_ACT.name());
+            promptEv.put("attempt", attempt);
+            promptEv.put("prompt", attemptPrompt);
+            trace.event("llm_prompt_vision_act", promptEv);
 
-        // Backward compatibility: if <command> is missing, try old extractor.
-        if (commandText == null || commandText.trim().isEmpty()) {
-            ExtractResult er = extractStructuredCommandForVision(raw);
-            commandText = er.commandText;
+            try {
+                // Send multimodal request (prompt + screenshot) via chat/completions.
+                raw = llmClient.chatOnce(cfg, null, attemptPrompt, screenshotPng);
+            } catch (Exception e) {
+                ctx.error = "planner_call_failed:VISION_ACT:" + e;
+                Map<String, Object> fail = new LinkedHashMap<>();
+                fail.put("task_id", ctx.taskId);
+                fail.put("state", State.VISION_ACT.name());
+                fail.put("attempt", attempt);
+                fail.put("err", String.valueOf(e));
+                trace.event("planner_call_failed", fail);
+                return State.FAIL;
+            }
+
+            Map<String, Object> respEv = new LinkedHashMap<>();
+            respEv.put("task_id", ctx.taskId);
+            respEv.put("state", State.VISION_ACT.name());
+            respEv.put("attempt", attempt);
+            String snippet = raw != null && raw.length() > 4000 ? raw.substring(0, 4000) + "..." : raw;
+            respEv.put("response", snippet != null ? snippet : "");
+            trace.event("llm_response_vision_act", respEv);
+
+            try {
+                // Parse the agreed regex-friendly output tags.
+                observing = extractTagText(raw, "Observing");
+                observeResult = extractTagText(raw, "Ovserve_result");
+                judging = extractTagText(raw, "Judging");
+                judgeResult = extractTagText(raw, "Judge_result");
+                thinking = extractTagText(raw, "Thinking");
+                actionText = extractTagText(raw, "action");
+                expectedText = extractTagText(raw, "expected");
+                commandText = extractTagText(raw, "command");
+
+                // Backward compatibility: if <command> is missing, try old extractor.
+                if (commandText == null || commandText.trim().isEmpty()) {
+                    ExtractResult er = extractStructuredCommandForVision(raw);
+                    commandText = er.commandText;
+                }
+                if (commandText == null || commandText.trim().isEmpty()) {
+                    throw new InstructionError("missing <command> tag");
+                }
+
+                // Normalize JSON outputs to DSL if needed.
+                normalized = normalizeModelOutput(commandText, State.VISION_ACT, ctx);
+                commands = parseInstructions(normalized, 1);
+                validateAllowed(commands, VISION_ALLOWED_OPS);
+                break;
+            } catch (InstructionError e) {
+                lastParseError = e.getMessage();
+                Map<String, Object> retryEv = new LinkedHashMap<>();
+                retryEv.put("task_id", ctx.taskId);
+                retryEv.put("state", State.VISION_ACT.name());
+                retryEv.put("attempt", attempt);
+                retryEv.put("max_attempts", maxVisionParseAttempts);
+                retryEv.put("error", lastParseError);
+                String retryRaw = (normalized != null && !normalized.isEmpty()) ? normalized : raw;
+                if (retryRaw != null && retryRaw.length() > 1000) {
+                    retryRaw = retryRaw.substring(0, 1000) + "...";
+                }
+                retryEv.put("raw", retryRaw != null ? retryRaw : "");
+                trace.event("vision_parse_retry", retryEv);
+            }
+        }
+
+        if (commands == null) {
+            ctx.error = "vision_instruction_invalid_after_retries:" + lastParseError;
+            Map<String, Object> fail = new LinkedHashMap<>();
+            fail.put("task_id", ctx.taskId);
+            fail.put("state", State.VISION_ACT.name());
+            fail.put("error", lastParseError);
+            trace.event("vision_instruction_invalid", fail);
+            throw new IllegalStateException(ctx.error);
         }
 
         Map<String, Object> structured = new LinkedHashMap<>();
@@ -1972,24 +2137,6 @@ public class CortexFsmEngine {
         // Stash next pair for history matching in next turn.
         ctx.pendingHistoryInstruction = actionText != null ? actionText.trim() : "";
         ctx.pendingHistoryExpected = expectedText != null ? expectedText.trim() : "";
-
-        // Normalize JSON outputs to DSL if needed.
-        String normalized = normalizeModelOutput(commandText != null && !commandText.isEmpty() ? commandText : raw, State.VISION_ACT, ctx);
-
-        // Parse DSL instructions (single command per vision turn)
-        List<Instruction> commands;
-        try {
-            commands = parseInstructions(normalized, 1);
-            validateAllowed(commands, VISION_ALLOWED_OPS);
-        } catch (InstructionError e) {
-            ctx.error = "vision_instruction_invalid:" + e.getMessage();
-            Map<String, Object> fail = new LinkedHashMap<>();
-            fail.put("task_id", ctx.taskId);
-            fail.put("error", e.getMessage());
-            fail.put("raw", normalized);
-            trace.event("vision_instruction_invalid", fail);
-            return State.FAIL;
-        }
 
         Instruction cmd0 = commands.get(0);
         String currentSig = cmd0.raw.trim();
@@ -2258,6 +2405,63 @@ public class CortexFsmEngine {
         sb.append("Usage guidance:\n");
         sb.append("- Use relevant items when useful for this objective.\n");
         sb.append("- Ignore irrelevant items safely.\n\n");
+
+        sb.append("[GUIDANCE_BLOCK]\n");
+        if (!ctx.userPlaybook.isEmpty()) {
+            sb.append("User-provided playbook (highest priority):\n");
+            sb.append(ctx.userPlaybook).append("\n");
+        } else {
+            sb.append("User-provided playbook: none\n");
+        }
+        if (!ctx.taskMemoryHint.isEmpty()) {
+            sb.append("Last successful task memory (reference only):\n");
+            String memPkg = stringOrEmpty(ctx.taskMemoryHint.get("package_name"));
+            String memPage = stringOrEmpty(ctx.taskMemoryHint.get("target_page"));
+            String memSummary = stringOrEmpty(ctx.taskMemoryHint.get("summary_text"));
+            if (!memPkg.isEmpty()) {
+                sb.append("- package: ").append(memPkg).append("\n");
+            }
+            if (!memPage.isEmpty()) {
+                sb.append("- target_page: ").append(memPage).append("\n");
+            }
+            if (!memSummary.isEmpty()) {
+                sb.append("- summary: ").append(memSummary).append("\n");
+            }
+            Object routeObj = ctx.taskMemoryHint.get("route_trace");
+            if (routeObj instanceof List) {
+                @SuppressWarnings("unchecked")
+                List<Object> route = (List<Object>) routeObj;
+                int take = Math.min(6, route.size());
+                for (int i = Math.max(0, route.size() - take); i < route.size(); i++) {
+                    sb.append("- route_step: ").append(String.valueOf(route.get(i))).append("\n");
+                }
+            }
+            Object cmdObj = ctx.taskMemoryHint.get("command_log");
+            if (cmdObj instanceof List) {
+                @SuppressWarnings("unchecked")
+                List<Object> cmdList = (List<Object>) cmdObj;
+                int take = Math.min(6, cmdList.size());
+                for (int i = Math.max(0, cmdList.size() - take); i < cmdList.size(); i++) {
+                    Object item = cmdList.get(i);
+                    if (item instanceof Map) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> m = (Map<String, Object>) item;
+                        String raw = stringOrEmpty(m.get("raw"));
+                        if (!raw.isEmpty()) {
+                            sb.append("- previous_command: ").append(raw).append("\n");
+                        }
+                    } else {
+                        sb.append("- previous_command: ").append(String.valueOf(item)).append("\n");
+                    }
+                }
+            }
+        } else {
+            sb.append("Last successful task memory: none\n");
+        }
+        sb.append("Guidance policy:\n");
+        sb.append("- Prioritize user playbook over memory when conflict exists.\n");
+        sb.append("- Use memory as heuristic reference, not hard constraint.\n");
+        sb.append("- If current UI contradicts guidance, trust current UI and adapt.\n\n");
 
         sb.append("[SCREENSHOT_BLOCK]\n");
         sb.append("Screenshot: attached\n\n");

@@ -25,12 +25,13 @@ public class SequenceTracker {
     /**
      * Returns true iff the exact same frame fingerprint was seen recently.
      */
-    public synchronized boolean isDuplicate(int seq, byte cmd, byte[] payload) {
+    public synchronized boolean isDuplicate(int seq, byte cmd, byte[] payload, String peerTag) {
         pruneExpired();
-        FrameKey key = new FrameKey(seq, cmd, payload);
+        FrameKey key = new FrameKey(seq, cmd, payload, peerTag);
         if (receiveWindow.containsKey(key)) {
             System.out.println("[Daemon] Duplicate frame detected: seq=" + seq +
-                    ", cmd=0x" + String.format("%02X", cmd & 0xFF));
+                    ", cmd=0x" + String.format("%02X", cmd & 0xFF) +
+                    ", peer=" + (peerTag == null ? "" : peerTag));
             return true;
         }
 
@@ -65,11 +66,13 @@ public class SequenceTracker {
         public final int seq;
         public final byte cmd;
         public final int payloadHash;
+        public final String peerTag;
 
-        public FrameKey(int seq, byte cmd, byte[] payload) {
+        public FrameKey(int seq, byte cmd, byte[] payload, String peerTag) {
             this.seq = seq;
             this.cmd = cmd;
             this.payloadHash = Arrays.hashCode(payload == null ? new byte[0] : payload);
+            this.peerTag = peerTag == null ? "" : peerTag;
         }
 
         @Override
@@ -77,7 +80,10 @@ public class SequenceTracker {
             if (this == o) return true;
             if (!(o instanceof FrameKey)) return false;
             FrameKey other = (FrameKey) o;
-            return seq == other.seq && cmd == other.cmd && payloadHash == other.payloadHash;
+            return seq == other.seq
+                    && cmd == other.cmd
+                    && payloadHash == other.payloadHash
+                    && peerTag.equals(other.peerTag);
         }
 
         @Override
@@ -85,6 +91,7 @@ public class SequenceTracker {
             int result = Integer.hashCode(seq);
             result = 31 * result + Byte.hashCode(cmd);
             result = 31 * result + Integer.hashCode(payloadHash);
+            result = 31 * result + peerTag.hashCode();
             return result;
         }
     }

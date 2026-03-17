@@ -55,4 +55,7 @@ public final class CommandIds {
     public static final byte CMD_CORTEX_TASK_STATUS = 0x77;     // query FSM task status by task_id
     public static final byte CMD_CORTEX_FSM_CANCEL = 0x78;      // request cancellation of current FSM task
     public static final byte CMD_CORTEX_TASK_LIST = 0x79;       // list recent Cortex FSM tasks
+    public static final byte CMD_CORTEX_SCHEDULE_ADD = 0x7A;    // add periodic scheduled FSM task
+    public static final byte CMD_CORTEX_SCHEDULE_LIST = 0x7B;   // list schedules
+    public static final byte CMD_CORTEX_SCHEDULE_REMOVE = 0x7C; // remove schedule by id
 }

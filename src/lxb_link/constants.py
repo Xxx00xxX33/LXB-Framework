@@ -162,6 +162,9 @@ CMD_CORTEX_FSM_RUN = 0x76          # Full Cortex FSM execution on device (sync)
 CMD_CORTEX_TASK_STATUS = 0x77      # Query Cortex FSM task status by task_id
 CMD_CORTEX_FSM_CANCEL = 0x78       # Request cancellation of current Cortex FSM task
 CMD_CORTEX_TASK_LIST = 0x79        # List recent Cortex FSM tasks
+CMD_CORTEX_SCHEDULE_ADD = 0x7A     # Add periodic scheduled Cortex FSM task
+CMD_CORTEX_SCHEDULE_LIST = 0x7B    # List schedules
+CMD_CORTEX_SCHEDULE_REMOVE = 0x7C  # Remove schedule by id
 
 # =============================================================================
 
@@ -208,6 +211,9 @@ IMPLEMENTED_COMMANDS_V1 = {
     CMD_CORTEX_TASK_STATUS,
     CMD_CORTEX_FSM_CANCEL,
     CMD_CORTEX_TASK_LIST,
+    CMD_CORTEX_SCHEDULE_ADD,
+    CMD_CORTEX_SCHEDULE_LIST,
+    CMD_CORTEX_SCHEDULE_REMOVE,
 }
 
 # =============================================================================

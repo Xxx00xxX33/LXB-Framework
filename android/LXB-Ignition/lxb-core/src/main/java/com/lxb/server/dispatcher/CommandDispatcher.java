@@ -53,8 +53,8 @@ public class CommandDispatcher {
     /**
      * Dispatch command and return ACK frame.
      */
-    public byte[] dispatch(FrameCodec.FrameInfo frame, byte[] payload) {
-        SequenceTracker.FrameKey frameKey = new SequenceTracker.FrameKey(frame.seq, frame.cmd, payload);
+    public byte[] dispatch(FrameCodec.FrameInfo frame, byte[] payload, String peerTag) {
+        SequenceTracker.FrameKey frameKey = new SequenceTracker.FrameKey(frame.seq, frame.cmd, payload, peerTag);
 
         // 0) Strong duplicate protection: if we have a cached ACK for this exact
         //    frame fingerprint (same seq + cmd + payload hash), reuse it directly.
@@ -69,7 +69,7 @@ public class CommandDispatcher {
         }
 
         // 1) Short-lived duplicate detection (same seq+cmd+payload fingerprint)
-        if (sequenceTracker.isDuplicate(frame.seq, frame.cmd, payload)) {
+        if (sequenceTracker.isDuplicate(frame.seq, frame.cmd, payload, peerTag)) {
             System.out.println(TAG + " Duplicate frame detected, returning cached ACK");
             byte[] cached = ackCache.get(frameKey);
             if (cached != null) {
@@ -194,6 +194,15 @@ public class CommandDispatcher {
                     break;
                 case CommandIds.CMD_CORTEX_TASK_LIST:
                     response = cortexFacade.handleCortexTaskList(payload);
+                    break;
+                case CommandIds.CMD_CORTEX_SCHEDULE_ADD:
+                    response = cortexFacade.handleCortexScheduleAdd(payload);
+                    break;
+                case CommandIds.CMD_CORTEX_SCHEDULE_LIST:
+                    response = cortexFacade.handleCortexScheduleList(payload);
+                    break;
+                case CommandIds.CMD_CORTEX_SCHEDULE_REMOVE:
+                    response = cortexFacade.handleCortexScheduleRemove(payload);
                     break;
 
                 default:

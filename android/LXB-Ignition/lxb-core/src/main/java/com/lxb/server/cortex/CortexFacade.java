@@ -347,6 +347,7 @@ public class CortexFacade {
             String startPage = stringOrEmpty(req.get("start_page"));
             String traceMode = stringOrEmpty(req.get("trace_mode"));
             int traceUdpPort = toInt(req.get("trace_udp_port"), 0);
+            String userPlaybook = stringOrEmpty(req.get("user_playbook"));
 
             if (userTask.isEmpty()) {
                 return err("user_task is required");
@@ -358,7 +359,8 @@ public class CortexFacade {
                     mapPath.isEmpty() ? null : mapPath,
                     startPage.isEmpty() ? null : startPage,
                     traceMode.isEmpty() ? null : traceMode,
-                    traceUdpPort > 0 ? traceUdpPort : null
+                    traceUdpPort > 0 ? traceUdpPort : null,
+                    userPlaybook.isEmpty() ? null : userPlaybook
             );
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("ok", true);
@@ -490,6 +492,147 @@ public class CortexFacade {
             Map<String, Object> ev = new LinkedHashMap<>();
             ev.put("err", String.valueOf(e));
             trace.event("cortex_task_list_err", ev);
+            return err(String.valueOf(e));
+        }
+    }
+
+    /**
+     * Add a scheduled FSM task.
+     *
+     * Payload JSON:
+     * {
+     *   "name": "optional",
+     *   "user_task": "...",              // required
+     *   "package": "optional",
+     *   "map_path": "optional",
+     *   "start_page": "optional",
+     *   "trace_mode": "push|",
+     *   "trace_udp_port": 23456,
+     *   "run_at": 1711111111111,         // required epoch ms, phone system time
+     *   "repeat_mode": "once|daily|weekly", // optional, default once
+     *   "repeat_weekdays": 31,           // optional, weekly mask (Mon bit0 ... Sun bit6)
+     *   "user_playbook": "optional"
+     * }
+     */
+    public byte[] handleCortexScheduleAdd(byte[] payload) {
+        try {
+            String s = payload != null ? new String(payload, StandardCharsets.UTF_8) : "{}";
+            Map<String, Object> req = Json.parseObject(s);
+
+            String name = stringOrEmpty(req.get("name"));
+            String userTask = stringOrEmpty(req.get("user_task"));
+            String pkg = stringOrEmpty(req.get("package"));
+            String mapPath = stringOrEmpty(req.get("map_path"));
+            String startPage = stringOrEmpty(req.get("start_page"));
+            String traceMode = stringOrEmpty(req.get("trace_mode"));
+            int traceUdpPort = toInt(req.get("trace_udp_port"), 0);
+            long runAt = toLong(req.get("run_at"), 0L);
+            if (runAt <= 0L) {
+                // Backward compatibility with old field name.
+                runAt = toLong(req.get("start_at"), 0L);
+            }
+            String repeatMode = stringOrEmpty(req.get("repeat_mode"));
+            int repeatWeekdays = toInt(req.get("repeat_weekdays"), 0);
+            // Backward compatibility for old payloads.
+            if (repeatMode.isEmpty()) {
+                boolean repeatDaily = false;
+                Object repeatObj = req.get("repeat_daily");
+                if (repeatObj instanceof Boolean) {
+                    repeatDaily = ((Boolean) repeatObj).booleanValue();
+                } else if (repeatObj != null) {
+                    repeatDaily = "true".equalsIgnoreCase(String.valueOf(repeatObj));
+                }
+                repeatMode = repeatDaily ? "daily" : "once";
+            }
+            String userPlaybook = stringOrEmpty(req.get("user_playbook"));
+
+            Map<String, Object> schedule = taskManager.addScheduledTask(
+                    name,
+                    userTask,
+                    pkg,
+                    mapPath.isEmpty() ? null : mapPath,
+                    startPage.isEmpty() ? null : startPage,
+                    traceMode.isEmpty() ? null : traceMode,
+                    traceUdpPort > 0 ? traceUdpPort : null,
+                    runAt,
+                    repeatMode,
+                    repeatWeekdays,
+                    userPlaybook
+            );
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("ok", true);
+            out.put("schedule", schedule);
+            trace.event("cortex_schedule_add", schedule);
+            return ok(Json.stringify(out));
+        } catch (Exception e) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("err", String.valueOf(e));
+            trace.event("cortex_schedule_add_err", ev);
+            return err(String.valueOf(e));
+        }
+    }
+
+    /**
+     * List schedules.
+     *
+     * Payload JSON (optional):
+     * {
+     *   "limit": 50
+     * }
+     */
+    public byte[] handleCortexScheduleList(byte[] payload) {
+        try {
+            int limit = 50;
+            if (payload != null && payload.length > 0) {
+                String s = new String(payload, StandardCharsets.UTF_8);
+                Map<String, Object> req = Json.parseObject(s);
+                limit = toInt(req.get("limit"), 50);
+            }
+            java.util.List<Map<String, Object>> schedules = taskManager.listScheduledTasks(limit);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("ok", true);
+            out.put("schedules", schedules);
+            return ok(Json.stringify(out));
+        } catch (Exception e) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("err", String.valueOf(e));
+            trace.event("cortex_schedule_list_err", ev);
+            return err(String.valueOf(e));
+        }
+    }
+
+    /**
+     * Remove schedule by id.
+     *
+     * Payload JSON:
+     * {
+     *   "schedule_id": "..."
+     * }
+     */
+    public byte[] handleCortexScheduleRemove(byte[] payload) {
+        try {
+            String s = payload != null ? new String(payload, StandardCharsets.UTF_8) : "{}";
+            Map<String, Object> req = Json.parseObject(s);
+            String scheduleId = stringOrEmpty(req.get("schedule_id"));
+            if (scheduleId.isEmpty()) {
+                return err("schedule_id is required");
+            }
+            boolean removed = taskManager.removeScheduledTask(scheduleId);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("ok", true);
+            out.put("removed", removed);
+            out.put("schedule_id", scheduleId);
+            if (removed) {
+                Map<String, Object> ev = new LinkedHashMap<>();
+                ev.put("schedule_id", scheduleId);
+                trace.event("cortex_schedule_remove", ev);
+            }
+            return ok(Json.stringify(out));
+        } catch (Exception e) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("err", String.valueOf(e));
+            trace.event("cortex_schedule_remove_err", ev);
             return err(String.valueOf(e));
         }
     }
@@ -780,6 +923,16 @@ public class CortexFacade {
         if (o instanceof Number) return ((Number) o).intValue();
         try {
             return Integer.parseInt(String.valueOf(o));
+        } catch (Exception ignored) {
+            return defaultValue;
+        }
+    }
+
+    private static long toLong(Object o, long defaultValue) {
+        if (o == null) return defaultValue;
+        if (o instanceof Number) return ((Number) o).longValue();
+        try {
+            return Long.parseLong(String.valueOf(o));
         } catch (Exception ignored) {
             return defaultValue;
         }

@@ -161,7 +161,8 @@ public class Main {
                     info.payloadLength = decoded.payload.length;
 
                     // 分派处理
-                    byte[] response = dispatcher.dispatch(info, decoded.payload);
+                    String peerTag = frame.address.getHostAddress() + ":" + frame.port;
+                    byte[] response = dispatcher.dispatch(info, decoded.payload, peerTag);
 
                     // 发送响应
                     server.send(frame.address, frame.port, response);

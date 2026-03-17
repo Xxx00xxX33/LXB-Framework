@@ -1,8 +1,17 @@
 package com.lxb.server.cortex;
 
+import com.lxb.server.cortex.json.Json;
+
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Calendar;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,8 +45,23 @@ public class CortexTaskManager {
     private final Deque<String> taskOrder = new ArrayDeque<String>();
     private static final int MAX_TASKS = 200;
 
-    // Dedicated worker thread that executes CortexFsmEngine.run(...).
+    // Schedule registry (in-memory v1).
+    private final ConcurrentHashMap<String, ScheduledTaskDef> scheduleRegistry =
+            new ConcurrentHashMap<String, ScheduledTaskDef>();
+    private final Deque<String> scheduleOrder = new ArrayDeque<String>();
+    private static final int MAX_SCHEDULES = 200;
+
+    // Task memory (v1): keyed by normalized task text and schedule id.
+    private final ConcurrentHashMap<String, Map<String, Object>> memoryByTaskKey =
+            new ConcurrentHashMap<String, Map<String, Object>>();
+    private final ConcurrentHashMap<String, Map<String, Object>> memoryByScheduleId =
+            new ConcurrentHashMap<String, Map<String, Object>>();
+    private final Object memoryLock = new Object();
+    private static final String TASK_MEMORY_PATH = "/data/local/tmp/lxb/task_memory.json";
+
+    // Dedicated worker/scheduler threads.
     private final Thread workerThread;
+    private final Thread schedulerThread;
 
     // Simple global cancellation flag for the single-worker FSM. When true,
     // the current FSM run will notice and exit at the next state boundary.
@@ -45,9 +69,13 @@ public class CortexTaskManager {
 
     public CortexTaskManager(CortexFsmEngine fsmEngine) {
         this.fsmEngine = fsmEngine;
+        loadTaskMemoryFromDisk();
         this.workerThread = new Thread(this::workerLoop, "CortexFsmWorker");
         this.workerThread.setDaemon(true);
         this.workerThread.start();
+        this.schedulerThread = new Thread(this::schedulerLoop, "CortexFsmScheduler");
+        this.schedulerThread.setDaemon(true);
+        this.schedulerThread.start();
     }
 
     /**
@@ -74,10 +102,53 @@ public class CortexTaskManager {
             String traceMode,
             Integer traceUdpPort
     ) {
+        return submitTask(userTask, packageName, mapPath, startPage, traceMode, traceUdpPort, null);
+    }
+
+    public String submitTask(
+            String userTask,
+            String packageName,
+            String mapPath,
+            String startPage,
+            String traceMode,
+            Integer traceUdpPort,
+            String userPlaybook
+    ) {
+        return submitTaskInternal(
+                userTask,
+                packageName,
+                mapPath,
+                startPage,
+                traceMode,
+                traceUdpPort,
+                "manual",
+                null,
+                userPlaybook
+        );
+    }
+
+    private String submitTaskInternal(
+            String userTask,
+            String packageName,
+            String mapPath,
+            String startPage,
+            String traceMode,
+            Integer traceUdpPort,
+            String source,
+            String scheduleId,
+            String userPlaybook
+    ) {
         long now = System.currentTimeMillis();
         TaskInstance instance = new TaskInstance();
         instance.taskId = UUID.randomUUID().toString();
         instance.userTask = userTask != null ? userTask : "";
+        instance.source = source != null ? source : "manual";
+        instance.scheduleId = scheduleId;
+        instance.userPlaybook = userPlaybook != null ? userPlaybook.trim() : "";
+        String taskKey = buildTaskMemoryKey(instance.userTask);
+        instance.taskMemoryKey = taskKey;
+        Map<String, Object> memoryHint = selectTaskMemoryHint(taskKey, scheduleId);
+        instance.memoryApplied = memoryHint != null && !memoryHint.isEmpty();
         instance.state = TaskState.PENDING;
         instance.createdAt = now;
 
@@ -88,6 +159,10 @@ public class CortexTaskManager {
                 startPage,
                 traceMode,
                 traceUdpPort,
+                instance.source,
+                instance.scheduleId,
+                instance.userPlaybook,
+                memoryHint,
                 instance
         );
         try {
@@ -100,6 +175,199 @@ public class CortexTaskManager {
         registerTaskInstance(instance);
 
         return instance.taskId;
+    }
+
+    /**
+     * Add a periodic scheduled task (v1).
+     *
+     * intervalSec: period in seconds, must be > 0.
+     * startAtMs: first run time (epoch ms); if <= 0, defaults to now + 1s.
+     */
+    public Map<String, Object> addScheduledTask(
+            String name,
+            String userTask,
+            String packageName,
+            String mapPath,
+            String startPage,
+            String traceMode,
+            Integer traceUdpPort,
+            long runAtMs,
+            String repeatModeRaw,
+            int repeatWeekdays,
+            String userPlaybook
+    ) {
+        if (userTask == null || userTask.trim().isEmpty()) {
+            throw new IllegalArgumentException("user_task is required");
+        }
+        if (runAtMs <= 0) {
+            throw new IllegalArgumentException("run_at is required and must be > 0");
+        }
+        String repeatMode = normalizeRepeatMode(repeatModeRaw);
+        long now = System.currentTimeMillis();
+        long firstRunAt;
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(runAtMs);
+        int h = c.get(Calendar.HOUR_OF_DAY);
+        int m = c.get(Calendar.MINUTE);
+        if ("daily".equals(repeatMode)) {
+            if (runAtMs > now) {
+                firstRunAt = runAtMs;
+            } else {
+                firstRunAt = computeNextDailyRun(h, m, now);
+            }
+        } else if ("weekly".equals(repeatMode)) {
+            if ((repeatWeekdays & 0x7F) == 0) {
+                throw new IllegalArgumentException("repeat_weekdays is required for weekly schedule");
+            }
+            int normalizedMask = (repeatWeekdays & 0x7F);
+            if (runAtMs > now && isWeekdaySelected(runAtMs, normalizedMask)) {
+                firstRunAt = runAtMs;
+            } else {
+                firstRunAt = computeNextWeeklyRun(h, m, normalizedMask, now);
+            }
+        } else {
+            firstRunAt = runAtMs;
+            if (firstRunAt <= now) {
+                throw new IllegalArgumentException("run_at must be in the future for one-shot schedule");
+            }
+        }
+
+        ScheduledTaskDef def = new ScheduledTaskDef();
+        def.scheduleId = UUID.randomUUID().toString();
+        def.name = name != null ? name.trim() : "";
+        def.userTask = userTask.trim();
+        def.packageName = packageName != null ? packageName.trim() : "";
+        def.mapPath = mapPath;
+        def.startPage = startPage;
+        def.traceMode = traceMode;
+        def.traceUdpPort = traceUdpPort;
+        def.userPlaybook = userPlaybook != null ? userPlaybook.trim() : "";
+        def.runAtMs = runAtMs;
+        def.repeatMode = repeatMode;
+        def.repeatWeekdays = (repeatWeekdays & 0x7F);
+        def.hourOfDay = h;
+        def.minuteOfHour = m;
+        def.nextRunAt = firstRunAt;
+        def.enabled = true;
+        def.createdAt = now;
+
+        scheduleRegistry.put(def.scheduleId, def);
+        synchronized (scheduleOrder) {
+            scheduleOrder.addLast(def.scheduleId);
+            while (scheduleOrder.size() > MAX_SCHEDULES) {
+                String evictId = scheduleOrder.pollFirst();
+                if (evictId != null) {
+                    scheduleRegistry.remove(evictId);
+                }
+            }
+        }
+
+        return snapshotSchedule(def);
+    }
+
+    /**
+     * Remove a schedule by id.
+     */
+    public boolean removeScheduledTask(String scheduleId) {
+        if (scheduleId == null || scheduleId.isEmpty()) {
+            return false;
+        }
+        ScheduledTaskDef removed = scheduleRegistry.remove(scheduleId);
+        synchronized (scheduleOrder) {
+            scheduleOrder.remove(scheduleId);
+        }
+        synchronized (memoryLock) {
+            memoryByScheduleId.remove(scheduleId);
+            saveTaskMemoryToDisk();
+        }
+        return removed != null;
+    }
+
+    /**
+     * List schedules (newest first).
+     */
+    public List<Map<String, Object>> listScheduledTasks(int limit) {
+        int effectiveLimit = Math.max(1, Math.min(limit, MAX_SCHEDULES));
+        List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
+        List<String> ids;
+        synchronized (scheduleOrder) {
+            ids = new ArrayList<String>(scheduleOrder);
+        }
+        for (int i = ids.size() - 1; i >= 0 && result.size() < effectiveLimit; i--) {
+            String id = ids.get(i);
+            ScheduledTaskDef def = scheduleRegistry.get(id);
+            if (def == null) {
+                continue;
+            }
+            result.add(snapshotSchedule(def));
+        }
+        return result;
+    }
+
+    private void schedulerLoop() {
+        for (; ; ) {
+            try {
+                long now = System.currentTimeMillis();
+                for (ScheduledTaskDef def : scheduleRegistry.values()) {
+                    if (def == null || !def.enabled) {
+                        continue;
+                    }
+                    if (now < def.nextRunAt) {
+                        continue;
+                    }
+                    synchronized (def) {
+                        long now2 = System.currentTimeMillis();
+                        if (!def.enabled || now2 < def.nextRunAt) {
+                            continue;
+                        }
+                        long triggeredAt = now2;
+                        def.lastTriggeredAt = triggeredAt;
+                        if ("daily".equals(def.repeatMode)) {
+                            def.nextRunAt = computeNextDailyRun(def.hourOfDay, def.minuteOfHour, now2 + 1000L);
+                        } else if ("weekly".equals(def.repeatMode)) {
+                            def.nextRunAt = computeNextWeeklyRun(
+                                    def.hourOfDay,
+                                    def.minuteOfHour,
+                                    def.repeatWeekdays,
+                                    now2 + 1000L
+                            );
+                        } else {
+                            def.enabled = false;
+                            def.nextRunAt = 0L;
+                        }
+                        def.triggerCount += 1;
+
+                        try {
+                            submitTaskInternal(
+                                    def.userTask,
+                                    def.packageName,
+                                    def.mapPath,
+                                    def.startPage,
+                                    def.traceMode,
+                                    def.traceUdpPort,
+                                    "schedule",
+                                    def.scheduleId,
+                                    def.userPlaybook
+                            );
+                        } catch (Exception ignored) {
+                            // Keep scheduler resilient; failures are reflected by missing task rows.
+                        }
+                    }
+                }
+                Thread.sleep(500L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception ignored) {
+                // Keep loop alive even if one bad schedule entry appears.
+                try {
+                    Thread.sleep(1000L);
+                } catch (InterruptedException e2) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
     }
 
     private void workerLoop() {
@@ -127,6 +395,8 @@ public class CortexTaskManager {
                             req.startPage,
                             req.traceMode,
                             req.traceUdpPort,
+                            req.userPlaybook,
+                            req.taskMemoryHint,
                             instance.taskId,
                             checker
                     );
@@ -156,6 +426,9 @@ public class CortexTaskManager {
                         instance.targetPage = String.valueOf(target);
                     }
                     instance.resultSummary = out;
+                    if (instance.state == TaskState.COMPLETED) {
+                        saveTaskMemoryFromSuccess(req, instance, out);
+                    }
 
                 } catch (Exception e) {
                     instance.finishedAt = System.currentTimeMillis();
@@ -198,6 +471,10 @@ public class CortexTaskManager {
         final String startPage;
         final String traceMode;
         final Integer traceUdpPort;
+        final String source;
+        final String scheduleId;
+        final String userPlaybook;
+        final Map<String, Object> taskMemoryHint;
         final TaskInstance instance;
 
         FsmTaskRequest(String userTask,
@@ -206,6 +483,10 @@ public class CortexTaskManager {
                        String startPage,
                        String traceMode,
                        Integer traceUdpPort,
+                       String source,
+                       String scheduleId,
+                       String userPlaybook,
+                       Map<String, Object> taskMemoryHint,
                        TaskInstance instance) {
             this.userTask = userTask;
             this.packageName = packageName;
@@ -213,6 +494,10 @@ public class CortexTaskManager {
             this.startPage = startPage;
             this.traceMode = traceMode;
             this.traceUdpPort = traceUdpPort;
+            this.source = source;
+            this.scheduleId = scheduleId;
+            this.userPlaybook = userPlaybook;
+            this.taskMemoryHint = taskMemoryHint;
             this.instance = instance;
         }
     }
@@ -248,6 +533,11 @@ public class CortexTaskManager {
         String reason;           // Error or explanation, if any
         String packageName;
         String targetPage;
+        String source;           // manual | schedule
+        String scheduleId;       // nullable
+        String userPlaybook;     // optional guidance text
+        String taskMemoryKey;    // normalized key
+        boolean memoryApplied;   // whether this run consumed memory hint
         Map<String, Object> resultSummary;
     }
 
@@ -284,6 +574,10 @@ public class CortexTaskManager {
         out.put("reason", inst.reason);
         out.put("package_name", inst.packageName);
         out.put("target_page", inst.targetPage);
+        out.put("source", inst.source);
+        out.put("schedule_id", inst.scheduleId);
+        out.put("task_memory_key", inst.taskMemoryKey);
+        out.put("memory_applied", inst.memoryApplied);
         if (inst.resultSummary != null) {
             out.put("summary", inst.resultSummary);
         }
@@ -320,9 +614,302 @@ public class CortexTaskManager {
             row.put("reason", inst.reason);
             row.put("package_name", inst.packageName);
             row.put("target_page", inst.targetPage);
+            row.put("source", inst.source);
+            row.put("schedule_id", inst.scheduleId);
+            row.put("task_memory_key", inst.taskMemoryKey);
+            row.put("memory_applied", inst.memoryApplied);
             result.add(row);
         }
         return result;
+    }
+
+    private static String buildTaskMemoryKey(String userTask) {
+        String s = userTask != null ? userTask.trim().toLowerCase() : "";
+        if (s.isEmpty()) {
+            return "task:empty";
+        }
+        return "task:" + s;
+    }
+
+    private Map<String, Object> selectTaskMemoryHint(String taskKey, String scheduleId) {
+        if (scheduleId != null && !scheduleId.isEmpty()) {
+            Map<String, Object> bySchedule = memoryByScheduleId.get(scheduleId);
+            if (bySchedule != null && !bySchedule.isEmpty()) {
+                return new LinkedHashMap<String, Object>(bySchedule);
+            }
+        }
+        if (taskKey != null && !taskKey.isEmpty()) {
+            Map<String, Object> byTask = memoryByTaskKey.get(taskKey);
+            if (byTask != null && !byTask.isEmpty()) {
+                return new LinkedHashMap<String, Object>(byTask);
+            }
+        }
+        return null;
+    }
+
+    private void saveTaskMemoryFromSuccess(FsmTaskRequest req, TaskInstance instance, Map<String, Object> out) {
+        try {
+            if (out == null || out.isEmpty()) {
+                return;
+            }
+            String status = String.valueOf(out.get("status"));
+            if (!"success".equalsIgnoreCase(status)) {
+                return;
+            }
+            Map<String, Object> snapshot = new LinkedHashMap<String, Object>();
+            snapshot.put("updated_at", System.currentTimeMillis());
+            snapshot.put("task_id", instance.taskId);
+            snapshot.put("user_task", req.userTask != null ? req.userTask : "");
+            snapshot.put("package_name", stringOrEmpty(out.get("package_name")));
+            snapshot.put("target_page", stringOrEmpty(out.get("target_page")));
+            snapshot.put("route_trace", copyList(out.get("route_trace"), 32));
+            snapshot.put("command_log", copyList(out.get("command_log"), 64));
+            snapshot.put("llm_history", copyList(out.get("llm_history"), 24));
+            Object outputObj = out.get("output");
+            if (outputObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> outputMap = (Map<String, Object>) outputObj;
+                snapshot.put("output", new LinkedHashMap<String, Object>(outputMap));
+            }
+            String summaryText = deriveSummaryText(snapshot);
+            snapshot.put("summary_text", summaryText);
+
+            synchronized (memoryLock) {
+                if (instance.taskMemoryKey != null && !instance.taskMemoryKey.isEmpty()) {
+                    memoryByTaskKey.put(instance.taskMemoryKey, snapshot);
+                }
+                if (instance.scheduleId != null && !instance.scheduleId.isEmpty()) {
+                    memoryByScheduleId.put(instance.scheduleId, snapshot);
+                }
+                saveTaskMemoryToDisk();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static String deriveSummaryText(Map<String, Object> snapshot) {
+        String pkg = stringOrEmpty(snapshot.get("package_name"));
+        String page = stringOrEmpty(snapshot.get("target_page"));
+        if (!pkg.isEmpty() && !page.isEmpty()) {
+            return "Last successful route reached " + page + " in " + pkg + ".";
+        }
+        if (!pkg.isEmpty()) {
+            return "Last successful task ran in package " + pkg + ".";
+        }
+        return "Last successful task memory available.";
+    }
+
+    private static List<Object> copyList(Object obj, int maxItems) {
+        List<Object> out = new ArrayList<Object>();
+        if (!(obj instanceof List)) {
+            return out;
+        }
+        List<?> in = (List<?>) obj;
+        int n = Math.min(maxItems, in.size());
+        for (int i = Math.max(0, in.size() - n); i < in.size(); i++) {
+            out.add(in.get(i));
+        }
+        return out;
+    }
+
+    private static String stringOrEmpty(Object o) {
+        return o == null ? "" : String.valueOf(o).trim();
+    }
+
+    private void loadTaskMemoryFromDisk() {
+        try {
+            File f = new File(TASK_MEMORY_PATH);
+            if (!f.exists() || !f.isFile()) {
+                return;
+            }
+            String json = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+            Object parsed = Json.parse(json);
+            if (!(parsed instanceof Map)) {
+                return;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = (Map<String, Object>) parsed;
+            Object byTaskObj = root.get("memory_by_task_key");
+            if (byTaskObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> m = (Map<String, Object>) byTaskObj;
+                for (Map.Entry<String, Object> e : m.entrySet()) {
+                    if (!(e.getValue() instanceof Map)) continue;
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> row = (Map<String, Object>) e.getValue();
+                    memoryByTaskKey.put(e.getKey(), new LinkedHashMap<String, Object>(row));
+                }
+            }
+            Object byScheduleObj = root.get("memory_by_schedule_id");
+            if (byScheduleObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> m = (Map<String, Object>) byScheduleObj;
+                for (Map.Entry<String, Object> e : m.entrySet()) {
+                    if (!(e.getValue() instanceof Map)) continue;
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> row = (Map<String, Object>) e.getValue();
+                    memoryByScheduleId.put(e.getKey(), new LinkedHashMap<String, Object>(row));
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void saveTaskMemoryToDisk() {
+        try {
+            File f = new File(TASK_MEMORY_PATH);
+            File parent = f.getParentFile();
+            if (parent != null && !parent.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                parent.mkdirs();
+            }
+            Map<String, Object> root = new LinkedHashMap<String, Object>();
+            root.put("memory_by_task_key", new LinkedHashMap<String, Object>(memoryByTaskKey));
+            root.put("memory_by_schedule_id", new LinkedHashMap<String, Object>(memoryByScheduleId));
+            String json = Json.stringify(root);
+            Files.write(f.toPath(), json.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static class ScheduledTaskDef {
+        String scheduleId;
+        String name;
+        String userTask;
+        String packageName;
+        String mapPath;
+        String startPage;
+        String traceMode;
+        Integer traceUdpPort;
+        String userPlaybook;
+
+        long runAtMs;
+        String repeatMode;
+        int repeatWeekdays;
+        int hourOfDay;
+        int minuteOfHour;
+        long nextRunAt;
+        long lastTriggeredAt;
+        long triggerCount;
+        long createdAt;
+        boolean enabled;
+    }
+
+    private static Map<String, Object> snapshotSchedule(ScheduledTaskDef def) {
+        Map<String, Object> out = new LinkedHashMap<String, Object>();
+        out.put("schedule_id", def.scheduleId);
+        out.put("name", def.name);
+        out.put("user_task", def.userTask);
+        out.put("package", def.packageName);
+        out.put("map_path", def.mapPath);
+        out.put("start_page", def.startPage);
+        out.put("trace_mode", def.traceMode);
+        out.put("trace_udp_port", def.traceUdpPort);
+        out.put("user_playbook", def.userPlaybook);
+        out.put("run_at", def.runAtMs);
+        out.put("repeat_mode", def.repeatMode);
+        out.put("repeat_weekdays", def.repeatWeekdays);
+        out.put("repeat_daily", "daily".equals(def.repeatMode));
+        out.put("next_run_at", def.nextRunAt);
+        out.put("last_triggered_at", def.lastTriggeredAt);
+        out.put("trigger_count", def.triggerCount);
+        out.put("enabled", def.enabled);
+        out.put("created_at", def.createdAt);
+        return out;
+    }
+
+    private static long computeNextDailyRun(int hour, int minute, long baseMs) {
+        Calendar now = Calendar.getInstance();
+        now.setTimeInMillis(baseMs);
+
+        Calendar next = Calendar.getInstance();
+        next.setTimeInMillis(baseMs);
+        next.set(Calendar.SECOND, 0);
+        next.set(Calendar.MILLISECOND, 0);
+        next.set(Calendar.HOUR_OF_DAY, hour);
+        next.set(Calendar.MINUTE, minute);
+        if (next.getTimeInMillis() <= now.getTimeInMillis()) {
+            next.add(Calendar.DAY_OF_MONTH, 1);
+        }
+        return next.getTimeInMillis();
+    }
+
+    private static long computeNextWeeklyRun(int hour, int minute, int weekdaysMask, long baseMs) {
+        if ((weekdaysMask & 0x7F) == 0) {
+            return 0L;
+        }
+        Calendar base = Calendar.getInstance();
+        base.setTimeInMillis(baseMs);
+        long best = Long.MAX_VALUE;
+        for (int offset = 0; offset <= 7; offset++) {
+            Calendar cand = (Calendar) base.clone();
+            cand.add(Calendar.DAY_OF_MONTH, offset);
+            cand.set(Calendar.SECOND, 0);
+            cand.set(Calendar.MILLISECOND, 0);
+            cand.set(Calendar.HOUR_OF_DAY, hour);
+            cand.set(Calendar.MINUTE, minute);
+            int dayIndex = toMonFirstDayIndex(cand.get(Calendar.DAY_OF_WEEK));
+            if (((weekdaysMask >> dayIndex) & 1) == 0) {
+                continue;
+            }
+            long t = cand.getTimeInMillis();
+            if (t > baseMs && t < best) {
+                best = t;
+            }
+        }
+        if (best != Long.MAX_VALUE) {
+            return best;
+        }
+        // Fallback: next selected day in the following week.
+        for (int offset = 1; offset <= 14; offset++) {
+            Calendar cand = (Calendar) base.clone();
+            cand.add(Calendar.DAY_OF_MONTH, offset);
+            cand.set(Calendar.SECOND, 0);
+            cand.set(Calendar.MILLISECOND, 0);
+            cand.set(Calendar.HOUR_OF_DAY, hour);
+            cand.set(Calendar.MINUTE, minute);
+            int dayIndex = toMonFirstDayIndex(cand.get(Calendar.DAY_OF_WEEK));
+            if (((weekdaysMask >> dayIndex) & 1) == 1) {
+                return cand.getTimeInMillis();
+            }
+        }
+        return 0L;
+    }
+
+    // Convert Calendar day to Mon=0 ... Sun=6.
+    private static int toMonFirstDayIndex(int dayOfWeek) {
+        switch (dayOfWeek) {
+            case Calendar.MONDAY:
+                return 0;
+            case Calendar.TUESDAY:
+                return 1;
+            case Calendar.WEDNESDAY:
+                return 2;
+            case Calendar.THURSDAY:
+                return 3;
+            case Calendar.FRIDAY:
+                return 4;
+            case Calendar.SATURDAY:
+                return 5;
+            case Calendar.SUNDAY:
+            default:
+                return 6;
+        }
+    }
+
+    private static boolean isWeekdaySelected(long whenMs, int weekdaysMask) {
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(whenMs);
+        int dayIndex = toMonFirstDayIndex(c.get(Calendar.DAY_OF_WEEK));
+        return ((weekdaysMask >> dayIndex) & 1) == 1;
+    }
+
+    private static String normalizeRepeatMode(String repeatModeRaw) {
+        String s = repeatModeRaw != null ? repeatModeRaw.trim().toLowerCase() : "";
+        if ("daily".equals(s) || "weekly".equals(s) || "once".equals(s)) {
+            return s;
+        }
+        return "once";
     }
 
     // Future public methods (not implemented yet):

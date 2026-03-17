@@ -7,6 +7,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.SocketTimeoutException
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Minimal LXB-Link client implementation running inside the APK.
@@ -24,12 +25,14 @@ class LocalLinkClient(
     private val defaultTimeoutMs: Int = 8000,
 ) : Closeable {
 
+    companion object {
+        // Keep sequence monotonic across all client instances in this process.
+        private val GLOBAL_SEQ = AtomicInteger(1)
+    }
+
     private val socket: DatagramSocket = DatagramSocket().apply {
         soTimeout = defaultTimeoutMs
     }
-
-    // Simple monotonically increasing sequence number.
-    private var nextSeq: Int = 1
 
     @Synchronized
     @Throws(Exception::class)
@@ -52,7 +55,7 @@ class LocalLinkClient(
 
     @Throws(Exception::class)
     private fun sendCommandRaw(cmd: Byte, payload: ByteArray, timeoutMs: Int): ByteArray {
-        val seq = nextSeq++
+        val seq = nextSeq()
         val frame = FrameCodec.encode(seq, cmd, payload)
 
         val address = InetAddress.getByName(host)
@@ -85,8 +88,17 @@ class LocalLinkClient(
         return decoded.payload
     }
 
+    private fun nextSeq(): Int {
+        while (true) {
+            val cur = GLOBAL_SEQ.get()
+            val next = if (cur >= 0x7FFFFFF0) 1 else cur + 1
+            if (GLOBAL_SEQ.compareAndSet(cur, next)) {
+                return cur
+            }
+        }
+    }
+
     override fun close() {
         socket.close()
     }
 }
-

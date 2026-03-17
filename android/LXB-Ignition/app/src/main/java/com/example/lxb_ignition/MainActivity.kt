@@ -1,6 +1,8 @@
 ﻿package com.example.lxb_ignition
 
+import android.app.DatePickerDialog
 import android.os.Bundle
+import android.widget.NumberPicker
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -24,6 +26,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -37,10 +40,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -48,6 +55,10 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.lxb_ignition.shizuku.ShizukuManager
 import com.example.lxb_ignition.ui.theme.LXBIgnitionTheme
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -190,52 +201,506 @@ fun ControlTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
 @Composable
 fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val tasks by viewModel.taskList.collectAsState()
-    val listState = rememberLazyListState()
+    val schedules by viewModel.scheduleList.collectAsState()
+    val scheduleName by viewModel.scheduleName.collectAsState()
+    val scheduleTask by viewModel.scheduleTask.collectAsState()
+    val scheduleStartAtMs by viewModel.scheduleStartAtMs.collectAsState()
+    val scheduleRepeatMode by viewModel.scheduleRepeatMode.collectAsState()
+    val scheduleRepeatWeekdays by viewModel.scheduleRepeatWeekdays.collectAsState()
+    val schedulePackage by viewModel.schedulePackage.collectAsState()
+    val scheduleStartPage by viewModel.scheduleStartPage.collectAsState()
+    val schedulePlaybook by viewModel.schedulePlaybook.collectAsState()
+    var page by rememberSaveable { mutableIntStateOf(0) }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text("Recent Tasks", style = MaterialTheme.typography.titleSmall)
-            OutlinedButton(
-                onClick = { viewModel.refreshTaskListOnDevice() },
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    horizontal = 8.dp,
-                    vertical = 4.dp
-                ),
-                modifier = Modifier.height(32.dp)
+    LaunchedEffect(Unit) {
+        viewModel.refreshScheduleListOnDevice()
+        viewModel.refreshTaskListOnDevice()
+    }
+
+    when (page) {
+        0 -> {
+            Column(
+                modifier = modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("Refresh", fontSize = 12.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Task Manager", style = MaterialTheme.typography.titleSmall)
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.refreshScheduleListOnDevice()
+                            viewModel.refreshTaskListOnDevice()
+                        },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 8.dp,
+                            vertical = 4.dp
+                        ),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Refresh All", fontSize = 12.sp)
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    onClick = { page = 1 }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("Schedules", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = "Manage scheduled tasks and create new ones. (${schedules.size})",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                        )
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    onClick = { page = 2 }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("Recent Runs", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = "View recent execution records. (${tasks.size})",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                        )
+                    }
+                }
             }
         }
 
-        if (tasks.isEmpty()) {
-            Text(
-                text = "No tasks yet. Run a task on the Control tab and then refresh.",
-                fontSize = 12.sp,
-                color = Color(0xFF757575)
-            )
-            return@Column
+        1 -> {
+            val scheduleListState = rememberLazyListState()
+            Column(
+                modifier = modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { page = 0 },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Back", fontSize = 12.sp)
+                    }
+                    Text(
+                        text = "Schedules",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(top = 6.dp)
+                    )
+                    OutlinedButton(
+                        onClick = { page = 3 },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("New", fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { viewModel.refreshScheduleListOnDevice() },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Refresh", fontSize = 12.sp)
+                    }
+                }
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    if (schedules.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = "No schedules yet.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            state = scheduleListState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(schedules, key = { it.scheduleId }) { schedule ->
+                                ScheduleRow(
+                                    schedule = schedule,
+                                    onDelete = { viewModel.removeScheduleOnDevice(schedule.scheduleId) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        Card(
-            modifier = Modifier.fillMaxSize()
-        ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
+        2 -> {
+            val taskListState = rememberLazyListState()
+            Column(
+                modifier = modifier
                     .fillMaxSize()
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(tasks) { task ->
-                    TaskRow(task = task, onClick = { viewModel.showTaskSummaryInChat(task) })
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { page = 0 },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Back", fontSize = 12.sp)
+                    }
+                    Text(
+                        text = "Recent Runs",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(top = 6.dp)
+                    )
+                    OutlinedButton(
+                        onClick = { viewModel.refreshTaskListOnDevice() },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Refresh", fontSize = 12.sp)
+                    }
+                }
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    if (tasks.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = "No runs yet. Submit a task from Control tab or wait for schedules.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            state = taskListState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(tasks, key = { it.taskId }) { task ->
+                                TaskRow(task = task, onClick = { viewModel.showTaskSummaryInChat(task) })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        else -> {
+            val context = LocalContext.current
+            val selectedRunAt = scheduleStartAtMs.toLongOrNull()?.takeIf { it > 0L }
+                ?: (System.currentTimeMillis() + 5 * 60_000L)
+            var showTimeWheel by rememberSaveable { mutableStateOf(false) }
+            Column(
+                modifier = modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { page = 1 },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Back", fontSize = 12.sp)
+                    }
+                    Text(
+                        text = "Create Schedule",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(top = 6.dp)
+                    )
+                }
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = scheduleTask,
+                            onValueChange = { viewModel.scheduleTask.value = it },
+                            label = { Text("Task description (required)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 3
+                        )
+                        Text(
+                            text = "Run time: ${formatTsFull(selectedRunAt)}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    val cal = Calendar.getInstance().apply { timeInMillis = selectedRunAt }
+                                    DatePickerDialog(
+                                        context,
+                                        { _, y, m, d ->
+                                            val next = Calendar.getInstance().apply {
+                                                timeInMillis = selectedRunAt
+                                                set(Calendar.YEAR, y)
+                                                set(Calendar.MONTH, m)
+                                                set(Calendar.DAY_OF_MONTH, d)
+                                            }
+                                            viewModel.scheduleStartAtMs.value = next.timeInMillis.toString()
+                                        },
+                                        cal.get(Calendar.YEAR),
+                                        cal.get(Calendar.MONTH),
+                                        cal.get(Calendar.DAY_OF_MONTH)
+                                    ).show()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Pick Date")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    showTimeWheel = true
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Pick Time")
+                            }
+                        }
+                        Text(
+                            text = "Repeat",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            RepeatModeButton(
+                                text = "Once",
+                                selected = scheduleRepeatMode == MainViewModel.REPEAT_ONCE,
+                                onClick = { viewModel.scheduleRepeatMode.value = MainViewModel.REPEAT_ONCE },
+                                modifier = Modifier.weight(1f)
+                            )
+                            RepeatModeButton(
+                                text = "Daily",
+                                selected = scheduleRepeatMode == MainViewModel.REPEAT_DAILY,
+                                onClick = { viewModel.scheduleRepeatMode.value = MainViewModel.REPEAT_DAILY },
+                                modifier = Modifier.weight(1f)
+                            )
+                            RepeatModeButton(
+                                text = "Weekly",
+                                selected = scheduleRepeatMode == MainViewModel.REPEAT_WEEKLY,
+                                onClick = { viewModel.scheduleRepeatMode.value = MainViewModel.REPEAT_WEEKLY },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (scheduleRepeatMode == MainViewModel.REPEAT_WEEKLY) {
+                            val labels = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                for (i in 0 until 4) {
+                                    val selected = ((scheduleRepeatWeekdays shr i) and 1) == 1
+                                    WeekdayButton(
+                                        text = labels[i],
+                                        selected = selected,
+                                        onClick = {
+                                            viewModel.scheduleRepeatWeekdays.value = scheduleRepeatWeekdays xor (1 shl i)
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                for (i in 4..6) {
+                                    val selected = ((scheduleRepeatWeekdays shr i) and 1) == 1
+                                    WeekdayButton(
+                                        text = labels[i],
+                                        selected = selected,
+                                        onClick = {
+                                            viewModel.scheduleRepeatWeekdays.value = scheduleRepeatWeekdays xor (1 shl i)
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                            Text(
+                                text = "Selected days: ${formatWeekdayMask(scheduleRepeatWeekdays)}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                            )
+                        }
+                        OutlinedTextField(
+                            value = scheduleName,
+                            onValueChange = { viewModel.scheduleName.value = it },
+                            label = { Text("Name (optional)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = schedulePackage,
+                            onValueChange = { viewModel.schedulePackage.value = it },
+                            label = { Text("Package (optional)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = scheduleStartPage,
+                            onValueChange = { viewModel.scheduleStartPage.value = it },
+                            label = { Text("Start page (optional)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = schedulePlaybook,
+                            onValueChange = { viewModel.schedulePlaybook.value = it },
+                            label = { Text("User playbook (optional)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 4
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    viewModel.addScheduleOnDevice()
+                                    page = 1
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Submit")
+                            }
+                            OutlinedButton(
+                                onClick = { page = 1 },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Cancel")
+                            }
+                        }
+                    }
+                }
+            }
+            if (showTimeWheel) {
+                val cal = Calendar.getInstance().apply { timeInMillis = selectedRunAt }
+                WheelTimePickerDialog(
+                    initialHour = cal.get(Calendar.HOUR_OF_DAY),
+                    initialMinute = cal.get(Calendar.MINUTE),
+                    onDismiss = { showTimeWheel = false },
+                    onConfirm = { hour, minute ->
+                        val next = Calendar.getInstance().apply {
+                            timeInMillis = selectedRunAt
+                            set(Calendar.HOUR_OF_DAY, hour)
+                            set(Calendar.MINUTE, minute)
+                            set(Calendar.SECOND, 0)
+                            set(Calendar.MILLISECOND, 0)
+                        }
+                        viewModel.scheduleStartAtMs.value = next.timeInMillis.toString()
+                        showTimeWheel = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ScheduleRow(
+    schedule: MainViewModel.ScheduleSummary,
+    onDelete: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = scheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = if (schedule.name.isNotEmpty()) schedule.name else schedule.userTask,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = "run_at=${formatTsFull(schedule.runAtMs)}, repeat=${formatRepeat(schedule.repeatMode, schedule.repeatWeekdays)}, next=${formatTsFull(schedule.nextRunAt)}, triggered=${schedule.triggerCount}",
+                fontSize = 11.sp,
+                color = scheme.onSurface.copy(alpha = 0.75f)
+            )
+            if (schedule.packageName.isNotEmpty()) {
+                Text(
+                    text = "package=${schedule.packageName}",
+                    fontSize = 11.sp,
+                    color = scheme.onSurface.copy(alpha = 0.75f)
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "id=${schedule.scheduleId.take(8)}...",
+                    fontSize = 10.sp,
+                    color = scheme.onSurface.copy(alpha = 0.6f)
+                )
+                OutlinedButton(
+                    onClick = onDelete,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.height(30.dp)
+                ) {
+                    Text("Delete", fontSize = 11.sp, color = scheme.error)
                 }
             }
         }
@@ -274,6 +739,12 @@ fun TaskRow(task: MainViewModel.TaskSummary, onClick: () -> Unit) {
                 if (task.packageName.isNotEmpty()) {
                     append(" / ").append(task.packageName)
                 }
+                if (task.source.isNotEmpty()) {
+                    append(" / ").append(task.source)
+                }
+                if (task.memoryApplied) {
+                    append(" / memory")
+                }
             }
             Text(
                 text = stateLabel,
@@ -288,6 +759,159 @@ fun TaskRow(task: MainViewModel.TaskSummary, onClick: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun WheelTimePickerDialog(
+    initialHour: Int,
+    initialMinute: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int, Int) -> Unit
+) {
+    var hour by rememberSaveable { mutableIntStateOf(initialHour.coerceIn(0, 23)) }
+    var minute by rememberSaveable { mutableIntStateOf(initialMinute.coerceIn(0, 59)) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Select Time") },
+        text = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Hour", fontSize = 12.sp)
+                    AndroidView(
+                        factory = { ctx ->
+                            NumberPicker(ctx).apply {
+                                minValue = 0
+                                maxValue = 23
+                                wrapSelectorWheel = true
+                                descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
+                                setFormatter { String.format(Locale.getDefault(), "%02d", it) }
+                            }
+                        },
+                        update = { picker ->
+                            if (picker.value != hour) {
+                                picker.value = hour
+                            }
+                            picker.setOnValueChangedListener { _, _, newVal ->
+                                hour = newVal
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp)
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Minute", fontSize = 12.sp)
+                    AndroidView(
+                        factory = { ctx ->
+                            NumberPicker(ctx).apply {
+                                minValue = 0
+                                maxValue = 59
+                                wrapSelectorWheel = true
+                                descendantFocusability = NumberPicker.FOCUS_BLOCK_DESCENDANTS
+                                setFormatter { String.format(Locale.getDefault(), "%02d", it) }
+                            }
+                        },
+                        update = { picker ->
+                            if (picker.value != minute) {
+                                picker.value = minute
+                            }
+                            picker.setOnValueChangedListener { _, _, newVal ->
+                                minute = newVal
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(hour, minute) }) {
+                Text("OK")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+private fun RepeatModeButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (selected) {
+        Button(onClick = onClick, modifier = modifier) {
+            Text(text)
+        }
+    } else {
+        OutlinedButton(onClick = onClick, modifier = modifier) {
+            Text(text)
+        }
+    }
+}
+
+@Composable
+private fun WeekdayButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (selected) {
+        Button(onClick = onClick, modifier = modifier) {
+            Text(text, fontSize = 11.sp)
+        }
+    } else {
+        OutlinedButton(onClick = onClick, modifier = modifier) {
+            Text(text, fontSize = 11.sp)
+        }
+    }
+}
+
+private fun formatTsFull(ms: Long): String {
+    if (ms <= 0L) return "-"
+    return runCatching {
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+        sdf.format(Date(ms))
+    }.getOrElse { "-" }
+}
+
+private fun formatWeekdayMask(mask: Int): String {
+    if ((mask and 0x7F) == 0) return "-"
+    val labels = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    val selected = mutableListOf<String>()
+    for (i in 0..6) {
+        if (((mask shr i) and 1) == 1) {
+            selected.add(labels[i])
+        }
+    }
+    return if (selected.isEmpty()) "-" else selected.joinToString(", ")
+}
+
+private fun formatRepeat(modeRaw: String, weekdays: Int): String {
+    return when (modeRaw.lowercase(Locale.getDefault())) {
+        MainViewModel.REPEAT_DAILY -> "daily"
+        MainViewModel.REPEAT_WEEKLY -> "weekly(${formatWeekdayMask(weekdays)})"
+        else -> "once"
     }
 }
 
