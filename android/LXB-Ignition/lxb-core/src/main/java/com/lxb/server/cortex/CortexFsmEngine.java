@@ -118,6 +118,11 @@ public class CortexFsmEngine {
     private final LlmClient llmClient;
     private final MapManager mapManager;
     private final MapPromptPlanner mapPlanner;
+    private static final int LAUNCH_RETRY_MAX = 3;
+    private static final long LAUNCH_WAIT_TIMEOUT_MS = 5000L;
+    private static final long LAUNCH_WAIT_SAMPLE_MS = 500L;
+    private static final int INPUT_METHOD_ADB = 0;
+    private static final int INPUT_METHOD_CLIPBOARD = 1;
 
     // Allowed ops per state, mirroring Python _ALLOWED_OPS
     private static final java.util.Set<String> VISION_ALLOWED_OPS = new java.util.HashSet<>();
@@ -1581,6 +1586,15 @@ public class CortexFsmEngine {
         launchEv.put("clear_task", true);
         launchEv.put("result", launchOk ? "ok" : "fail");
         trace.event("fsm_routing_launch_app", launchEv);
+        if (!launchOk) {
+            ctx.error = "routing_launch_failed";
+            Map<String, Object> fail = new LinkedHashMap<>();
+            fail.put("task_id", ctx.taskId);
+            fail.put("package", pkg);
+            fail.put("reason", ctx.error);
+            trace.event("fsm_routing_failed", fail);
+            return State.FAIL;
+        }
 
         // No-map mode: nothing to tap, route_result just records launch.
         if (!hasMap || path == null || path.isEmpty()) {
@@ -1590,15 +1604,6 @@ public class CortexFsmEngine {
             ctx.routeResult.put("mode", "no_map");
             ctx.routeResult.put("package", pkg);
             ctx.routeResult.put("steps", new ArrayList<Map<String, Object>>());
-            if (!launchOk) {
-                ctx.error = "routing_launch_failed";
-                Map<String, Object> fail = new LinkedHashMap<>();
-                fail.put("task_id", ctx.taskId);
-                fail.put("package", pkg);
-                fail.put("reason", ctx.error);
-                trace.event("fsm_routing_failed", fail);
-                return State.FAIL;
-            }
             trace.event("fsm_routing_done", new LinkedHashMap<String, Object>() {{
                 put("task_id", ctx.taskId);
                 put("package", pkg);
@@ -1737,29 +1742,97 @@ public class CortexFsmEngine {
      */
     private boolean launchAppForRouting(String packageName) {
         try {
-            // Best-effort stop before launch to avoid start failure when app is in a bad background state.
-            stopAppBestEffortForRouting(packageName);
-            byte[] pkgBytes = packageName.getBytes(StandardCharsets.UTF_8);
-            ByteBuffer buf = ByteBuffer.allocate(1 + 2 + pkgBytes.length).order(ByteOrder.BIG_ENDIAN);
-            int flags = 0x01; // CLEAR_TASK
-            buf.put((byte) flags);
-            buf.putShort((short) pkgBytes.length);
-            buf.put(pkgBytes);
-            byte[] resp = execution != null ? execution.handleLaunchApp(buf.array()) : null;
-            boolean ok = resp != null && resp.length > 0 && resp[0] == 0x01;
-            if (!ok) {
+            for (int attempt = 1; attempt <= LAUNCH_RETRY_MAX; attempt++) {
+                // Best-effort stop before launch to avoid start failure when app is in a bad background state.
+                stopAppBestEffortForRouting(packageName);
+                boolean launchOk = launchAppClearTaskForRouting(packageName);
+                boolean packageReady = launchOk && waitForForegroundPackageForRouting(
+                        packageName, LAUNCH_WAIT_TIMEOUT_MS, LAUNCH_WAIT_SAMPLE_MS
+                );
+
                 Map<String, Object> ev = new LinkedHashMap<>();
                 ev.put("package", packageName);
-                ev.put("status", resp != null && resp.length > 0 ? (int) resp[0] : 0);
-                trace.event("fsm_routing_launch_status", ev);
+                ev.put("attempt", attempt);
+                ev.put("launch_ok", launchOk);
+                ev.put("package_ready", packageReady);
+                trace.event("fsm_routing_launch_attempt", ev);
+
+                if (launchOk && packageReady) {
+                    return true;
+                }
             }
-            return ok;
+
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("package", packageName);
+            ev.put("attempts", LAUNCH_RETRY_MAX);
+            ev.put("reason", "package_not_ready");
+            trace.event("fsm_routing_launch_failed", ev);
+            return false;
         } catch (Exception e) {
             Map<String, Object> ev = new LinkedHashMap<>();
             ev.put("package", packageName);
             ev.put("err", String.valueOf(e));
             trace.event("fsm_routing_launch_err", ev);
             return false;
+        }
+    }
+
+    private boolean launchAppClearTaskForRouting(String packageName) {
+        byte[] pkgBytes = packageName.getBytes(StandardCharsets.UTF_8);
+        ByteBuffer buf = ByteBuffer.allocate(1 + 2 + pkgBytes.length).order(ByteOrder.BIG_ENDIAN);
+        int flags = 0x01; // CLEAR_TASK
+        buf.put((byte) flags);
+        buf.putShort((short) pkgBytes.length);
+        buf.put(pkgBytes);
+        byte[] resp = execution != null ? execution.handleLaunchApp(buf.array()) : null;
+        boolean ok = resp != null && resp.length > 0 && resp[0] == 0x01;
+        if (!ok) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("package", packageName);
+            ev.put("status", resp != null && resp.length > 0 ? (int) resp[0] : 0);
+            trace.event("fsm_routing_launch_status", ev);
+        }
+        return ok;
+    }
+
+    private boolean waitForForegroundPackageForRouting(String expectedPackage, long timeoutMs, long sampleMs) {
+        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+        while (true) {
+            String currentPkg = getCurrentPackageForRouting();
+            if (expectedPackage.equals(currentPkg)) {
+                return true;
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                return false;
+            }
+            try {
+                Thread.sleep(Math.max(1L, sampleMs));
+            } catch (InterruptedException ignored) {
+                return false;
+            }
+        }
+    }
+
+    private String getCurrentPackageForRouting() {
+        try {
+            byte[] resp = perception != null ? perception.handleGetActivity() : null;
+            if (resp == null || resp.length < 5) {
+                return "";
+            }
+            ByteBuffer buf = ByteBuffer.wrap(resp).order(ByteOrder.BIG_ENDIAN);
+            byte status = buf.get();
+            if (status == 0) {
+                return "";
+            }
+            int pkgLen = buf.getShort() & 0xFFFF;
+            if (pkgLen <= 0 || buf.remaining() < pkgLen) {
+                return "";
+            }
+            byte[] pkgBytes = new byte[pkgLen];
+            buf.get(pkgBytes);
+            return new String(pkgBytes, StandardCharsets.UTF_8).trim();
+        } catch (Exception ignored) {
+            return "";
         }
     }
 
@@ -2275,32 +2348,53 @@ public class CortexFsmEngine {
             }
             if ("INPUT".equals(cmd.op)) {
                 String text = cmd.args.get(0);
-                // Simple method: method=1, flags=0, targetX/targetY=0, delay=0.
-                byte method = 0x01;
+                // Keep parity with client.input_text(..., method=AUTO):
+                // - ASCII text: ADB -> Clipboard
+                // - Non-ASCII text: Clipboard -> ADB
                 byte flags = 0x00;
                 short targetX = 0;
                 short targetY = 0;
                 short delayMs = 0;
-                byte[] textBytes = text.getBytes(StandardCharsets.UTF_8);
-                short len = (short) textBytes.length;
-
-                ByteBuffer buf = ByteBuffer.allocate(10 + textBytes.length).order(ByteOrder.BIG_ENDIAN);
-                buf.put(method);
-                buf.put(flags);
-                buf.putShort(targetX);
-                buf.putShort(targetY);
-                buf.putShort(delayMs);
-                buf.putShort(len);
-                buf.put(textBytes);
                 Map<String, Object> ev = new LinkedHashMap<>();
                 ev.put("task_id", ctx.taskId);
                 ev.put("text", text);
                 trace.event("exec_input_start", ev);
-                byte[] resp = execution.handleInputText(buf.array());
-                int status = (resp != null && resp.length >= 1) ? (resp[0] & 0xFF) : 0;
-                ev.put("status", status);
+
+                int[] methods = containsNonAscii(text)
+                        ? new int[]{INPUT_METHOD_CLIPBOARD, INPUT_METHOD_ADB}
+                        : new int[]{INPUT_METHOD_ADB, INPUT_METHOD_CLIPBOARD};
+                int lastStatus = 0;
+                int lastActualMethod = methods[0];
+                int chosenMethod = methods[0];
+
+                for (int i = 0; i < methods.length; i++) {
+                    int method = methods[i];
+                    byte[] resp = sendInputText(method, flags, targetX, targetY, delayMs, text);
+                    int status = (resp != null && resp.length >= 1) ? (resp[0] & 0xFF) : 0;
+                    int actualMethod = (resp != null && resp.length >= 2) ? (resp[1] & 0xFF) : method;
+                    lastStatus = status;
+                    lastActualMethod = actualMethod;
+
+                    Map<String, Object> tryEv = new LinkedHashMap<>();
+                    tryEv.put("task_id", ctx.taskId);
+                    tryEv.put("try", i + 1);
+                    tryEv.put("method", method);
+                    tryEv.put("status", status);
+                    tryEv.put("actual_method", actualMethod);
+                    trace.event("exec_input_try", tryEv);
+
+                    if (status == 1) {
+                        chosenMethod = method;
+                        break;
+                    }
+                }
+
+                ev.put("method_auto", true);
+                ev.put("chosen_method", chosenMethod);
+                ev.put("actual_method", lastActualMethod);
+                ev.put("status", lastStatus);
                 trace.event("exec_input_result", ev);
-                return status != 0;
+                return lastStatus == 1;
             }
             if ("WAIT".equals(cmd.op)) {
                 int ms = Integer.parseInt(cmd.args.get(0));
@@ -2344,6 +2438,32 @@ public class CortexFsmEngine {
             trace.event("exec_action_error", ev);
             return false;
         }
+    }
+
+    private byte[] sendInputText(int method, byte flags, short targetX, short targetY, short delayMs, String text) {
+        byte[] textBytes = text != null ? text.getBytes(StandardCharsets.UTF_8) : new byte[0];
+        short len = (short) textBytes.length;
+        ByteBuffer buf = ByteBuffer.allocate(10 + textBytes.length).order(ByteOrder.BIG_ENDIAN);
+        buf.put((byte) method);
+        buf.put(flags);
+        buf.putShort(targetX);
+        buf.putShort(targetY);
+        buf.putShort(delayMs);
+        buf.putShort(len);
+        buf.put(textBytes);
+        return execution.handleInputText(buf.array());
+    }
+
+    private boolean containsNonAscii(String s) {
+        if (s == null || s.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) > 127) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

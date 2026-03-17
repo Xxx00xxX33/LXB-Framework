@@ -27,6 +27,9 @@ import java.util.zip.GZIPInputStream;
 public class CortexFacade {
 
     private static final String TAG = "[LXB][Cortex]";
+    private static final int LAUNCH_RETRY_MAX = 3;
+    private static final long LAUNCH_WAIT_TIMEOUT_MS = 5000L;
+    private static final long LAUNCH_WAIT_SAMPLE_MS = 500L;
 
     private final ExecutionEngine executionEngine;
     private final PerceptionEngine perceptionEngine;
@@ -833,6 +836,16 @@ public class CortexFacade {
         launchEv.put("clear_task", true);
         launchEv.put("result", launchOk ? "ok" : "fail");
         trace.event("route_launch_app", launchEv);
+        if (!launchOk) {
+            Map<String, Object> outFail = new LinkedHashMap<>();
+            outFail.put("ok", false);
+            outFail.put("package", pkg);
+            outFail.put("from_page", effectiveFrom);
+            outFail.put("to_page", effectiveTo);
+            outFail.put("steps", new java.util.ArrayList<>());
+            outFail.put("reason", "launch_failed");
+            return outFail;
+        }
         // Python side sleeps ~1.5s after launch_app; do the same to avoid resolving on a half-loaded UI.
         try {
             Thread.sleep(1500);
@@ -1037,22 +1050,96 @@ public class CortexFacade {
      */
     private boolean launchAppForRoute(String packageName) {
         try {
-            // Best-effort stop before launch to avoid start failure on some devices.
-            stopAppBestEffortForRoute(packageName);
-            byte[] pkgBytes = packageName.getBytes(StandardCharsets.UTF_8);
-            ByteBuffer buf = ByteBuffer.allocate(1 + 2 + pkgBytes.length).order(ByteOrder.BIG_ENDIAN);
-            int flags = 0x01; // CLEAR_TASK
-            buf.put((byte) flags);
-            buf.putShort((short) pkgBytes.length);
-            buf.put(pkgBytes);
-            byte[] resp = executionEngine.handleLaunchApp(buf.array());
-            return resp != null && resp.length > 0 && resp[0] == 0x01;
+            for (int attempt = 1; attempt <= LAUNCH_RETRY_MAX; attempt++) {
+                // Best-effort stop before launch to avoid start failure on some devices.
+                stopAppBestEffortForRoute(packageName);
+                boolean launchOk = launchAppClearTaskForRoute(packageName);
+                boolean packageReady = launchOk && waitForForegroundPackageForRoute(
+                        packageName, LAUNCH_WAIT_TIMEOUT_MS, LAUNCH_WAIT_SAMPLE_MS
+                );
+
+                Map<String, Object> ev = new LinkedHashMap<>();
+                ev.put("package", packageName);
+                ev.put("attempt", attempt);
+                ev.put("launch_ok", launchOk);
+                ev.put("package_ready", packageReady);
+                trace.event("route_launch_attempt", ev);
+
+                if (launchOk && packageReady) {
+                    return true;
+                }
+            }
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("package", packageName);
+            ev.put("attempts", LAUNCH_RETRY_MAX);
+            ev.put("reason", "package_not_ready");
+            trace.event("route_launch_failed", ev);
+            return false;
         } catch (Exception e) {
             Map<String, Object> ev = new LinkedHashMap<>();
             ev.put("err", String.valueOf(e));
             ev.put("package", packageName);
             trace.event("route_launch_err", ev);
             return false;
+        }
+    }
+
+    private boolean launchAppClearTaskForRoute(String packageName) {
+        byte[] pkgBytes = packageName.getBytes(StandardCharsets.UTF_8);
+        ByteBuffer buf = ByteBuffer.allocate(1 + 2 + pkgBytes.length).order(ByteOrder.BIG_ENDIAN);
+        int flags = 0x01; // CLEAR_TASK
+        buf.put((byte) flags);
+        buf.putShort((short) pkgBytes.length);
+        buf.put(pkgBytes);
+        byte[] resp = executionEngine.handleLaunchApp(buf.array());
+        boolean ok = resp != null && resp.length > 0 && resp[0] == 0x01;
+        if (!ok) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("package", packageName);
+            ev.put("status", resp != null && resp.length > 0 ? (int) resp[0] : 0);
+            trace.event("route_launch_status", ev);
+        }
+        return ok;
+    }
+
+    private boolean waitForForegroundPackageForRoute(String expectedPackage, long timeoutMs, long sampleMs) {
+        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
+        while (true) {
+            String currentPkg = getCurrentPackageForRoute();
+            if (expectedPackage.equals(currentPkg)) {
+                return true;
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                return false;
+            }
+            try {
+                Thread.sleep(Math.max(1L, sampleMs));
+            } catch (InterruptedException ignored) {
+                return false;
+            }
+        }
+    }
+
+    private String getCurrentPackageForRoute() {
+        try {
+            byte[] resp = perceptionEngine.handleGetActivity();
+            if (resp == null || resp.length < 5) {
+                return "";
+            }
+            ByteBuffer buf = ByteBuffer.wrap(resp).order(ByteOrder.BIG_ENDIAN);
+            byte status = buf.get();
+            if (status == 0) {
+                return "";
+            }
+            int pkgLen = buf.getShort() & 0xFFFF;
+            if (pkgLen <= 0 || buf.remaining() < pkgLen) {
+                return "";
+            }
+            byte[] pkgBytes = new byte[pkgLen];
+            buf.get(pkgBytes);
+            return new String(pkgBytes, StandardCharsets.UTF_8).trim();
+        } catch (Exception ignored) {
+            return "";
         }
     }
 
