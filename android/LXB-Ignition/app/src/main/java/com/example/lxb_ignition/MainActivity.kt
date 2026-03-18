@@ -34,6 +34,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -51,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -1360,6 +1362,9 @@ fun LlmConfigCard(viewModel: MainViewModel) {
     val llmBaseUrl by viewModel.llmBaseUrl.collectAsState()
     val llmApiKey by viewModel.llmApiKey.collectAsState()
     val llmModel by viewModel.llmModel.collectAsState()
+    val autoUnlockBeforeRoute by viewModel.autoUnlockBeforeRoute.collectAsState()
+    val autoLockAfterTask by viewModel.autoLockAfterTask.collectAsState()
+    val unlockPin by viewModel.unlockPin.collectAsState()
     val llmTestResult by viewModel.llmTestResult.collectAsState()
 
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -1399,6 +1404,54 @@ fun LlmConfigCard(viewModel: MainViewModel) {
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 supportingText = { Text("e.g. gpt-4o-mini, qwen-plus") }
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto unlock before route", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Check state and unlock before launch/routing.",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                }
+                Switch(
+                    checked = autoUnlockBeforeRoute,
+                    onCheckedChange = { viewModel.autoUnlockBeforeRoute.value = it }
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto lock after task", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Lock screen when task ends if it was unlocked by FSM.",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        fontSize = 12.sp
+                    )
+                }
+                Switch(
+                    checked = autoLockAfterTask,
+                    onCheckedChange = { viewModel.autoLockAfterTask.value = it }
+                )
+            }
+            OutlinedTextField(
+                value = unlockPin,
+                onValueChange = { viewModel.unlockPin.value = it },
+                label = { Text("Unlock PIN / password") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                supportingText = {
+                    Text("Used by device-side FSM after swipe unlock when lockscreen still requires credentials.")
+                }
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(

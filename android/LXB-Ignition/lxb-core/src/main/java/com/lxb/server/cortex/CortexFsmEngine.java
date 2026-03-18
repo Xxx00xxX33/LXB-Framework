@@ -111,6 +111,12 @@ public class CortexFsmEngine {
         public String userPlaybook = "";
         public final Map<String, Object> taskMemoryHint = new LinkedHashMap<>();
 
+        // Device unlock/lock policy (loaded from config).
+        public boolean autoUnlockBeforeRoute = true;
+        public boolean autoLockAfterTask = true;
+        public String unlockPin = "";
+        public boolean unlockedByFsm = false;
+
         public Context(String taskId) {
             this.taskId = taskId;
         }
@@ -134,6 +140,8 @@ public class CortexFsmEngine {
     private static final int UI_SETTLE_REQUIRED_HITS = 2;
     private static final int VISION_MAX_TURNS_SINGLE = 100;
     private static final int VISION_MAX_TURNS_LOOP = 100;
+    private static final int KEYCODE_ENTER = 66;
+    private static final int KEYCODE_POWER = 26;
 
     // Allowed ops per state, mirroring Python _ALLOWED_OPS
     private static final java.util.Set<String> VISION_ALLOWED_OPS = new java.util.HashSet<>();
@@ -224,6 +232,7 @@ public class CortexFsmEngine {
 
         String initialPackageName = packageName != null ? packageName : "";
         ctx.selectedPackage = initialPackageName;
+        loadUnlockPolicyFromConfig(ctx);
 
         boolean enablePush = "push".equalsIgnoreCase(traceMode)
                 && traceUdpPort != null
@@ -322,7 +331,7 @@ public class CortexFsmEngine {
                 String fastPathPkg = resolveMemoryFastPathPackage(ctx);
                 if (!fastPathPkg.isEmpty()) {
                     ctx.selectedPackage = fastPathPkg;
-                    boolean launchOk = launchAppForRouting(fastPathPkg);
+                    boolean launchOk = launchAppForRouting(ctx, fastPathPkg);
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("task_id", ctx.taskId);
                     m.put("index", idx);
@@ -432,6 +441,7 @@ public class CortexFsmEngine {
             State finalState = overallSuccess ? State.FINISH : State.FAIL;
             ctx.currentSubTask = null;
             ctx.currentSubTaskIndex = -1;
+            tryAutoLockAfterTask(ctx, finalState);
 
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("status", finalState == State.FINISH ? "success" : "failed");
@@ -448,6 +458,9 @@ public class CortexFsmEngine {
             out.put("guidance_memory_used", !ctx.taskMemoryHint.isEmpty());
             out.put("memory_fast_path_used", anyMemoryFastPathUsed);
             out.put("memory_fast_path_fallback", anyMemoryFastPathFallback);
+            out.put("auto_unlock_before_route", ctx.autoUnlockBeforeRoute);
+            out.put("auto_lock_after_task", ctx.autoLockAfterTask);
+            out.put("unlocked_by_fsm", ctx.unlockedByFsm);
             if (ctx.error != null && !ctx.error.isEmpty()) {
                 out.put("reason", ctx.error);
             }
@@ -1603,7 +1616,7 @@ public class CortexFsmEngine {
         }
 
         // 2) Launch app once for both map and no-map modes.
-        boolean launchOk = launchAppForRouting(pkg);
+        boolean launchOk = launchAppForRouting(ctx, pkg);
         Map<String, Object> launchEv = new LinkedHashMap<>();
         launchEv.put("task_id", ctx.taskId);
         launchEv.put("package", pkg);
@@ -1764,9 +1777,12 @@ public class CortexFsmEngine {
      * Launch app for routing, Java port of Python RouteThenActCortex._execute_route launch step.
      * Always uses CLEAR_TASK flag so each route starts from a clean task stack.
      */
-    private boolean launchAppForRouting(String packageName) {
+    private boolean launchAppForRouting(Context ctx, String packageName) {
         try {
             for (int attempt = 1; attempt <= LAUNCH_RETRY_MAX; attempt++) {
+                if (!ensureUnlockedBeforeRoute(ctx, packageName, attempt)) {
+                    continue;
+                }
                 // Best-effort stop before launch to avoid start failure when app is in a bad background state.
                 stopAppBestEffortForRouting(packageName);
                 boolean launchOk = launchAppClearTaskForRouting(packageName);
@@ -1882,6 +1898,228 @@ public class CortexFsmEngine {
             ev.put("err", String.valueOf(e));
             trace.event("fsm_routing_stop_err", ev);
         }
+    }
+
+    private void loadUnlockPolicyFromConfig(Context ctx) {
+        ctx.autoUnlockBeforeRoute = true;
+        ctx.autoLockAfterTask = true;
+        ctx.unlockPin = "";
+        try {
+            LlmConfig cfg = LlmConfig.loadDefault();
+            ctx.autoUnlockBeforeRoute = cfg.autoUnlockBeforeRoute;
+            ctx.autoLockAfterTask = cfg.autoLockAfterTask;
+            ctx.unlockPin = cfg.unlockPin != null ? cfg.unlockPin.trim() : "";
+
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("task_id", ctx.taskId);
+            ev.put("auto_unlock_before_route", ctx.autoUnlockBeforeRoute);
+            ev.put("auto_lock_after_task", ctx.autoLockAfterTask);
+            ev.put("has_unlock_pin", !ctx.unlockPin.isEmpty());
+            trace.event("fsm_unlock_policy_loaded", ev);
+        } catch (Exception e) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("task_id", ctx.taskId);
+            ev.put("reason", "config_unavailable");
+            ev.put("err", String.valueOf(e));
+            ev.put("auto_unlock_before_route", ctx.autoUnlockBeforeRoute);
+            ev.put("auto_lock_after_task", ctx.autoLockAfterTask);
+            trace.event("fsm_unlock_policy_default", ev);
+        }
+    }
+
+    private boolean ensureUnlockedBeforeRoute(Context ctx, String packageName, int routeAttempt) {
+        if (!ctx.autoUnlockBeforeRoute) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("task_id", ctx.taskId);
+            ev.put("package", packageName);
+            ev.put("route_attempt", routeAttempt);
+            ev.put("result", "skip_policy_disabled");
+            trace.event("fsm_route_unlock", ev);
+            return true;
+        }
+
+        int state = getScreenStateCode();
+        if (state == 1) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("task_id", ctx.taskId);
+            ev.put("package", packageName);
+            ev.put("route_attempt", routeAttempt);
+            ev.put("screen_state", state);
+            ev.put("result", "already_unlocked");
+            trace.event("fsm_route_unlock", ev);
+            return true;
+        }
+
+        for (int unlockAttempt = 1; unlockAttempt <= 3; unlockAttempt++) {
+            byte[] unlockResp = execution != null ? execution.handleUnlock(new byte[0]) : null;
+            boolean unlockCmdOk = unlockResp != null && unlockResp.length > 0 && unlockResp[0] == 0x01;
+            sleepQuiet(250);
+
+            int afterUnlockState = getScreenStateCode();
+            boolean pinTried = false;
+            boolean pinInputOk = false;
+
+            if (afterUnlockState != 1 && !ctx.unlockPin.isEmpty()) {
+                pinTried = true;
+                pinInputOk = tryInputUnlockPin(ctx.unlockPin);
+                sleepQuiet(450);
+                afterUnlockState = getScreenStateCode();
+            }
+
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("task_id", ctx.taskId);
+            ev.put("package", packageName);
+            ev.put("route_attempt", routeAttempt);
+            ev.put("unlock_attempt", unlockAttempt);
+            ev.put("unlock_cmd_ok", unlockCmdOk);
+            ev.put("pin_tried", pinTried);
+            ev.put("pin_input_ok", pinInputOk);
+            ev.put("screen_state_after", afterUnlockState);
+            trace.event("fsm_route_unlock_attempt", ev);
+
+            if (afterUnlockState == 1) {
+                ctx.unlockedByFsm = true;
+                Map<String, Object> okEv = new LinkedHashMap<>();
+                okEv.put("task_id", ctx.taskId);
+                okEv.put("package", packageName);
+                okEv.put("route_attempt", routeAttempt);
+                okEv.put("unlock_attempt", unlockAttempt);
+                okEv.put("result", "ok");
+                trace.event("fsm_route_unlock", okEv);
+                return true;
+            }
+        }
+
+        Map<String, Object> ev = new LinkedHashMap<>();
+        ev.put("task_id", ctx.taskId);
+        ev.put("package", packageName);
+        ev.put("route_attempt", routeAttempt);
+        ev.put("result", "failed");
+        ev.put("screen_state", getScreenStateCode());
+        trace.event("fsm_route_unlock", ev);
+        return false;
+    }
+
+    private boolean tryInputUnlockPin(String pin) {
+        if (pin == null || pin.trim().isEmpty()) {
+            return false;
+        }
+        String text = pin.trim();
+        if (isDigitsOnly(text)) {
+            boolean allOk = true;
+            for (int i = 0; i < text.length(); i++) {
+                int d = text.charAt(i) - '0';
+                int keycode = 7 + d; // KEYCODE_0..KEYCODE_9
+                allOk = sendKeyClick(keycode) && allOk;
+                sleepQuiet(80);
+            }
+            boolean enterOk = sendKeyClick(KEYCODE_ENTER);
+            return allOk && enterOk;
+        }
+
+        int[] methods = containsNonAscii(text)
+                ? new int[]{INPUT_METHOD_CLIPBOARD, INPUT_METHOD_ADB}
+                : new int[]{INPUT_METHOD_ADB, INPUT_METHOD_CLIPBOARD};
+        boolean inputOk = false;
+        for (int method : methods) {
+            byte[] resp = sendInputText(method, (byte) 0x00, (short) 0, (short) 0, (short) 0, text);
+            int status = (resp != null && resp.length >= 1) ? (resp[0] & 0xFF) : 0;
+            if (status == 1) {
+                inputOk = true;
+                break;
+            }
+        }
+        boolean enterOk = sendKeyClick(KEYCODE_ENTER);
+        return inputOk && enterOk;
+    }
+
+    private boolean sendKeyClick(int keycode) {
+        try {
+            ByteBuffer buf = ByteBuffer.allocate(6).order(ByteOrder.BIG_ENDIAN);
+            buf.put((byte) (keycode & 0xFF));
+            buf.put((byte) 2); // CLICK
+            buf.putInt(0);
+            byte[] resp = execution != null ? execution.handleKeyEvent(buf.array()) : null;
+            return resp != null && resp.length > 0 && resp[0] == 0x01;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static boolean isDigitsOnly(String s) {
+        if (s == null || s.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int getScreenStateCode() {
+        try {
+            byte[] resp = perception != null ? perception.handleGetScreenState() : null;
+            if (resp == null || resp.length < 2) {
+                return -1;
+            }
+            int ok = resp[0] & 0xFF;
+            if (ok == 0) {
+                return -1;
+            }
+            return resp[1] & 0xFF;
+        } catch (Exception ignored) {
+            return -1;
+        }
+    }
+
+    private void tryAutoLockAfterTask(Context ctx, State finalState) {
+        if (!ctx.autoLockAfterTask || !ctx.unlockedByFsm) {
+            return;
+        }
+        int before = getScreenStateCode();
+        if (before != 1) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("task_id", ctx.taskId);
+            ev.put("final_state", finalState.name());
+            ev.put("before_state", before);
+            ev.put("result", "skip_not_unlocked_state");
+            trace.event("fsm_auto_lock", ev);
+            return;
+        }
+
+        boolean locked = false;
+        int after = before;
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            boolean powerOk = sendKeyClick(KEYCODE_POWER);
+            sleepQuiet(250);
+            after = getScreenStateCode();
+            locked = (after == 0 || after == 2);
+
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("task_id", ctx.taskId);
+            ev.put("final_state", finalState.name());
+            ev.put("attempt", attempt);
+            ev.put("before_state", before);
+            ev.put("after_state", after);
+            ev.put("power_ok", powerOk);
+            ev.put("locked", locked);
+            trace.event("fsm_auto_lock_attempt", ev);
+
+            if (locked) {
+                break;
+            }
+        }
+
+        Map<String, Object> ev = new LinkedHashMap<>();
+        ev.put("task_id", ctx.taskId);
+        ev.put("final_state", finalState.name());
+        ev.put("before_state", before);
+        ev.put("after_state", after);
+        ev.put("locked", locked);
+        trace.event("fsm_auto_lock", ev);
     }
 
     /**

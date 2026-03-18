@@ -39,6 +39,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_LLM_BASE_URL = "llm_base_url"
         private const val KEY_LLM_API_KEY = "llm_api_key"
         private const val KEY_LLM_MODEL = "llm_model"
+        private const val KEY_AUTO_UNLOCK_BEFORE_ROUTE = "auto_unlock_before_route"
+        private const val KEY_AUTO_LOCK_AFTER_TASK = "auto_lock_after_task"
+        private const val KEY_UNLOCK_PIN = "unlock_pin"
 
         // Local UDP port for trace push from lxb-core.
         private const val TRACE_UDP_PORT = 23456
@@ -73,6 +76,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val llmBaseUrl = MutableStateFlow(prefs.getString(KEY_LLM_BASE_URL, "") ?: "")
     val llmApiKey = MutableStateFlow(prefs.getString(KEY_LLM_API_KEY, "") ?: "")
     val llmModel = MutableStateFlow(prefs.getString(KEY_LLM_MODEL, "gpt-4o-mini") ?: "gpt-4o-mini")
+    val autoUnlockBeforeRoute = MutableStateFlow(prefs.getBoolean(KEY_AUTO_UNLOCK_BEFORE_ROUTE, true))
+    val autoLockAfterTask = MutableStateFlow(prefs.getBoolean(KEY_AUTO_LOCK_AFTER_TASK, true))
+    val unlockPin = MutableStateFlow(prefs.getString(KEY_UNLOCK_PIN, "") ?: "")
     val llmTestResult = MutableStateFlow("")
 
     // Control tab
@@ -1165,6 +1171,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .put("api_base_url", baseUrl)
                 .put("api_key", llmApiKey.value)
                 .put("model", model)
+                .put("auto_unlock_before_route", autoUnlockBeforeRoute.value)
+                .put("auto_lock_after_task", autoLockAfterTask.value)
+                .put("unlock_pin", unlockPin.value.trim())
                 .toString()
             val cfgBytes = cfgJson.toByteArray(Charset.forName("UTF-8"))
             val llmConfigPath = shizukuManager.getLlmConfigPath()
@@ -1233,6 +1242,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putString(KEY_LLM_BASE_URL, llmBaseUrl.value)
             .putString(KEY_LLM_API_KEY, llmApiKey.value)
             .putString(KEY_LLM_MODEL, llmModel.value)
+            .putBoolean(KEY_AUTO_UNLOCK_BEFORE_ROUTE, autoUnlockBeforeRoute.value)
+            .putBoolean(KEY_AUTO_LOCK_AFTER_TASK, autoLockAfterTask.value)
+            .putString(KEY_UNLOCK_PIN, unlockPin.value)
             .apply()
     }
 
