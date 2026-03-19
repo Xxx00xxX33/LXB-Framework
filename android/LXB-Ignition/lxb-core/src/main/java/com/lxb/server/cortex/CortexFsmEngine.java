@@ -139,6 +139,8 @@ public class CortexFsmEngine {
     private static final long UI_SETTLE_FALLBACK_MS = 600L;
     private static final double UI_SETTLE_SIM_THRESHOLD = 0.90d;
     private static final int UI_SETTLE_REQUIRED_HITS = 2;
+    private static final int FAST_SKIP_MAX_TURNS = 2;
+    private static final long FAST_SKIP_POST_TAP_SLEEP_MS = 220L;
     private static final int VISION_MAX_TURNS_SINGLE = 100;
     private static final int VISION_MAX_TURNS_LOOP = 100;
     private static final long UNLOCK_POST_CMD_SLEEP_MS = 3000L;
@@ -2687,6 +2689,12 @@ public class CortexFsmEngine {
             }
         }
 
+        // Fast local splash-ad skip:
+        // avoid waiting for VLM when "skip" only exists for a short window.
+        if (tryFastSkipSplashAd(ctx)) {
+            return State.VISION_ACT;
+        }
+
         // Screenshot: we still take it for parity with Python, but current LLM is text-only.
         byte[] shotResp = null;
         byte[] screenshotPng = null;
@@ -2934,6 +2942,188 @@ public class CortexFsmEngine {
         }
 
         return State.VISION_ACT;
+    }
+
+    private boolean tryFastSkipSplashAd(Context ctx) {
+        if (ctx == null || ctx.visionTurns > FAST_SKIP_MAX_TURNS) {
+            return false;
+        }
+        try {
+            byte[] payload = perception != null ? perception.handleDumpActions(new byte[0]) : null;
+            List<DumpActionsParser.ActionNode> nodes = DumpActionsParser.parse(payload);
+            if (nodes == null || nodes.isEmpty()) {
+                return false;
+            }
+
+            int screenW = parseIntLike(ctx.deviceInfo.get("width"), 0);
+            int screenH = parseIntLike(ctx.deviceInfo.get("height"), 0);
+            if (screenW <= 0 || screenH <= 0) {
+                for (DumpActionsParser.ActionNode n : nodes) {
+                    if (n == null || n.bounds == null) {
+                        continue;
+                    }
+                    screenW = Math.max(screenW, n.bounds.right);
+                    screenH = Math.max(screenH, n.bounds.bottom);
+                }
+            }
+            if (screenW <= 0) {
+                screenW = 1080;
+            }
+            if (screenH <= 0) {
+                screenH = 2400;
+            }
+
+            SkipCandidate best = null;
+            int matched = 0;
+            for (DumpActionsParser.ActionNode n : nodes) {
+                SkipCandidate c = scoreSplashSkipCandidate(n, screenW, screenH);
+                if (c == null) {
+                    continue;
+                }
+                matched += 1;
+                if (best == null || c.score > best.score) {
+                    best = c;
+                }
+            }
+
+            Map<String, Object> probe = new LinkedHashMap<>();
+            probe.put("task_id", ctx.taskId);
+            probe.put("turn", ctx.visionTurns);
+            probe.put("matched_nodes", matched);
+            probe.put("screen_w", screenW);
+            probe.put("screen_h", screenH);
+            if (best != null) {
+                probe.put("best_score", best.score);
+                probe.put("best_text", best.label);
+                probe.put("best_x", best.x);
+                probe.put("best_y", best.y);
+            }
+            trace.event("vision_fast_skip_probe", probe);
+
+            if (best == null || best.score < 120) {
+                return false;
+            }
+
+            boolean tapOk = sendTap(best.x, best.y);
+            Map<String, Object> tapEv = new LinkedHashMap<>();
+            tapEv.put("task_id", ctx.taskId);
+            tapEv.put("turn", ctx.visionTurns);
+            tapEv.put("x", best.x);
+            tapEv.put("y", best.y);
+            tapEv.put("score", best.score);
+            tapEv.put("text", best.label);
+            tapEv.put("tap_ok", tapOk);
+            trace.event("vision_fast_skip_tap", tapEv);
+            if (!tapOk) {
+                return false;
+            }
+
+            sleepQuiet(FAST_SKIP_POST_TAP_SLEEP_MS);
+            waitForUiStableByDumpActions(ctx, "FAST_SKIP");
+            return true;
+        } catch (Exception e) {
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("task_id", ctx != null ? ctx.taskId : "");
+            err.put("turn", ctx != null ? ctx.visionTurns : 0);
+            err.put("err", String.valueOf(e));
+            trace.event("vision_fast_skip_error", err);
+            return false;
+        }
+    }
+
+    private SkipCandidate scoreSplashSkipCandidate(DumpActionsParser.ActionNode n, int screenW, int screenH) {
+        if (n == null || n.bounds == null) {
+            return null;
+        }
+        String text = stringOrEmpty(n.text).trim();
+        String desc = stringOrEmpty(n.contentDesc).trim();
+        String label = !text.isEmpty() ? text : desc;
+        if (label.isEmpty()) {
+            return null;
+        }
+
+        String lower = label.toLowerCase(Locale.ROOT);
+        boolean keywordHit = lower.contains("跳过")
+                || lower.equals("skip")
+                || lower.contains("skip ad")
+                || lower.contains("skipads")
+                || lower.contains("略过");
+        if (!keywordHit) {
+            return null;
+        }
+
+        int x = n.bounds.centerX();
+        int y = n.bounds.centerY();
+        int w = Math.max(0, n.bounds.right - n.bounds.left);
+        int h = Math.max(0, n.bounds.bottom - n.bounds.top);
+        long area = (long) w * (long) h;
+        long screenArea = (long) Math.max(1, screenW) * (long) Math.max(1, screenH);
+
+        int score = 100;
+        if ((n.type & 0x01) != 0) {
+            score += 22;
+        } else if ((n.type & 0x08) != 0) {
+            score -= 18;
+        }
+
+        if (x >= (screenW * 72) / 100) {
+            score += 20;
+        } else if (x >= (screenW * 55) / 100) {
+            score += 10;
+        } else {
+            score -= 16;
+        }
+
+        if (y <= (screenH * 18) / 100) {
+            score += 20;
+        } else if (y <= (screenH * 35) / 100) {
+            score += 10;
+        } else {
+            score -= 18;
+        }
+
+        if (area > 0 && area <= (screenArea / 8)) {
+            score += 8;
+        } else if (area > (screenArea / 5)) {
+            score -= 18;
+        }
+
+        if (label.length() > 12) {
+            score -= 8;
+        }
+        if (lower.contains("广告") && lower.contains("跳过")) {
+            score += 8;
+        }
+
+        return new SkipCandidate(x, y, score, label);
+    }
+
+    private static int parseIntLike(Object o, int def) {
+        if (o == null) {
+            return def;
+        }
+        if (o instanceof Number) {
+            return ((Number) o).intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(o).trim());
+        } catch (Exception ignored) {
+            return def;
+        }
+    }
+
+    private static class SkipCandidate {
+        final int x;
+        final int y;
+        final int score;
+        final String label;
+
+        SkipCandidate(int x, int y, int score, String label) {
+            this.x = x;
+            this.y = y;
+            this.score = score;
+            this.label = label != null ? label : "";
+        }
     }
 
     /**

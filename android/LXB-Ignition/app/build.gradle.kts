@@ -4,6 +4,39 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+import java.io.File
+import java.util.Properties
+
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) {
+        f.inputStream().use { load(it) }
+    }
+}
+
+fun propLocalOrEnv(key: String): String? {
+    val local = localProps.getProperty(key)?.trim()
+    if (!local.isNullOrEmpty()) return local
+    val env = System.getenv(key)?.trim()
+    if (!env.isNullOrEmpty()) return env
+    return null
+}
+
+val releaseStoreFileRaw = propLocalOrEnv("LXB_RELEASE_STORE_FILE")
+val releaseStorePassword = propLocalOrEnv("LXB_RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = propLocalOrEnv("LXB_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = propLocalOrEnv("LXB_RELEASE_KEY_PASSWORD")
+
+val hasCustomReleaseSigning = !releaseStoreFileRaw.isNullOrBlank()
+        && !releaseStorePassword.isNullOrBlank()
+        && !releaseKeyAlias.isNullOrBlank()
+        && !releaseKeyPassword.isNullOrBlank()
+
+val releaseStoreFile: File? = releaseStoreFileRaw?.let {
+    val f = File(it)
+    if (f.isAbsolute) f else rootProject.file(it)
+}
+
 android {
     namespace = "com.example.lxb_ignition"
     compileSdk {
@@ -21,15 +54,38 @@ android {
         applicationId = "com.example.lxb_ignition"
         minSdk = 30
         targetSdk = 36
-        versionCode = 201
-        versionName = "0.2.1"
+        versionCode = 202
+        versionName = "0.2.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (hasCustomReleaseSigning && releaseStoreFile != null && releaseStoreFile.exists()) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = if (hasCustomReleaseSigning
+                && releaseStoreFile != null
+                && releaseStoreFile.exists()
+            ) {
+                signingConfigs.getByName("release")
+            } else {
+                // Fallback keeps local release artifacts installable even
+                // when a custom release keystore is not configured.
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
