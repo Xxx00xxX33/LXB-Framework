@@ -1206,7 +1206,7 @@ fun ConfigOverviewPage(
         )
         ConfigEntryCard(
             title = "Device core server",
-            description = "UDP port and related options for lxb-core running on this device.",
+            description = "TCP port and related options for lxb-core running on this device.",
             onClick = onOpenDeviceCore
         )
         ConfigEntryCard(
@@ -1311,13 +1311,13 @@ fun LxbCoreConfigCard(viewModel: MainViewModel) {
             OutlinedTextField(
                 value = lxbPort,
                 onValueChange = { viewModel.lxbPort.value = it },
-                label = { Text("UDP port") },
+                label = { Text("TCP port") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 supportingText = {
                     Text(
-                        "UDP port listened by lxb-core on device (default 12345)",
+                        "TCP port listened by lxb-core on device (default 12345)",
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )

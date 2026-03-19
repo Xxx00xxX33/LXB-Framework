@@ -10,8 +10,8 @@ import com.example.lxb_ignition.service.TaskRuntimeService
 import com.example.lxb_ignition.shizuku.ShizukuManager
 import com.lxb.server.cortex.LlmClient
 import com.lxb.server.protocol.CommandIds
-import java.net.DatagramPacket
-import java.net.DatagramSocket
+import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,6 +35,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_LXB_PORT = "lxb_port"
         private const val KEY_SERVER_IP = "server_ip"
         private const val KEY_SERVER_PORT = "server_port"
+        private const val DEFAULT_LXB_PORT = "12345"
 
         private const val KEY_LLM_BASE_URL = "llm_base_url"
         private const val KEY_LLM_API_KEY = "llm_api_key"
@@ -43,12 +44,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_AUTO_LOCK_AFTER_TASK = "auto_lock_after_task"
         private const val KEY_UNLOCK_PIN = "unlock_pin"
 
-        // Local UDP port for trace push from lxb-core.
-        private const val TRACE_UDP_PORT = 23456
+        // Local TCP port for trace push from lxb-core.
+        private const val TRACE_PUSH_PORT = 23456
 
         const val REPEAT_ONCE = "once"
         const val REPEAT_DAILY = "daily"
         const val REPEAT_WEEKLY = "weekly"
+
+        private fun normalizePortString(raw: String?): String {
+            val p = raw?.trim()?.toIntOrNull() ?: return DEFAULT_LXB_PORT
+            return if (p in 1..65535) p.toString() else DEFAULT_LXB_PORT
+        }
     }
 
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -66,7 +72,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val logLines: StateFlow<List<String>> = _logLines.asStateFlow()
 
     // Config: lxb-core server
-    val lxbPort = MutableStateFlow(prefs.getString(KEY_LXB_PORT, "12345") ?: "12345")
+    val lxbPort = MutableStateFlow(
+        normalizePortString(prefs.getString(KEY_LXB_PORT, DEFAULT_LXB_PORT))
+    )
 
     // Config: PC web_console (kept for compatibility; Android no longer sends tasks by default)
     val serverIp = MutableStateFlow(prefs.getString(KEY_SERVER_IP, "") ?: "")
@@ -167,6 +175,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         })
         shizukuManager.attach()
+        // Migrate stale/invalid port values (e.g., "0") to default.
+        persistNormalizedLxbPortIfNeeded()
     }
 
     // ----- Shizuku / lxb-core operations -----
@@ -176,9 +186,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startServer() {
-        val port = lxbPort.value.toIntOrNull() ?: run {
+        val port = currentLxbPortOrNull() ?: run {
             appendLog("Invalid lxb-core port")
-            appendSystemMessage("Invalid lxb-core port, please check UDP port in Config tab.")
+            appendSystemMessage("Invalid lxb-core port, please check TCP port in Config tab.")
             return
         }
         saveConfig()
@@ -215,10 +225,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val url = "http://$ip:$port/api/cortex/fsm/start"
-                    val json = org.json.JSONObject()
-                        .put("user_task", req)
-                        .put("lxb_port", lxbPort.value.toIntOrNull() ?: 12345)
-                        .toString()
+                        val json = org.json.JSONObject()
+                            .put("user_task", req)
+                            .put("lxb_port", currentLxbPortOrDefault())
+                            .toString()
                     val body = json.toRequestBody("application/json".toMediaType())
                     val request = Request.Builder().url(url).post(body).build()
                     httpClient.newCall(request).execute().use { resp ->
@@ -241,9 +251,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appendSystemMessage("Please enter a task description before running on device.")
             return
         }
-        val port = lxbPort.value.toIntOrNull() ?: run {
+        val port = currentLxbPortOrNull() ?: run {
             sendResult.value = "Invalid lxb-core port"
-            appendSystemMessage("Invalid lxb-core port, please check UDP port in Config tab.")
+            appendSystemMessage("Invalid lxb-core port, please check TCP port in Config tab.")
             return
         }
         saveConfig()
@@ -269,7 +279,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             appendSystemMessage("Server is running, calling Cortex FSM on device...")
 
-            // Ensure UDP trace listener is running so that chat shows live FSM progress.
+            // Ensure trace listener is running so that chat shows live FSM progress.
             ensureTraceUdpListener()
 
             val result = withContext(Dispatchers.IO) {
@@ -281,7 +291,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val json = org.json.JSONObject()
                             .put("user_task", req)
                             .put("trace_mode", "push")
-                            .put("trace_udp_port", TRACE_UDP_PORT)
+                            .put("trace_udp_port", TRACE_PUSH_PORT)
                             .toString()
                         val payload = json.toByteArray(Charsets.UTF_8)
 
@@ -327,7 +337,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun cancelCurrentTaskOnDevice() {
-        val port = lxbPort.value.toIntOrNull() ?: run {
+        val port = currentLxbPortOrNull() ?: run {
             appendSystemMessage("Invalid lxb-core port, cannot cancel task.")
             return
         }
@@ -357,7 +367,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshTaskListOnDevice() {
-        val port = lxbPort.value.toIntOrNull() ?: run {
+        val port = currentLxbPortOrNull() ?: run {
             appendSystemMessage("Invalid lxb-core port, cannot refresh task list.")
             return
         }
@@ -417,7 +427,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshScheduleListOnDevice() {
-        val port = lxbPort.value.toIntOrNull() ?: run {
+        val port = currentLxbPortOrNull() ?: run {
             appendSystemMessage("Invalid lxb-core port, cannot refresh schedule list.")
             return
         }
@@ -481,7 +491,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addScheduleOnDevice() {
-        val port = lxbPort.value.toIntOrNull() ?: run {
+        val port = currentLxbPortOrNull() ?: run {
             appendSystemMessage("Invalid lxb-core port, cannot add schedule.")
             return
         }
@@ -520,7 +530,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .put("package", packageName)
                         .put("start_page", startPage)
                         .put("trace_mode", "push")
-                        .put("trace_udp_port", TRACE_UDP_PORT)
+                        .put("trace_udp_port", TRACE_PUSH_PORT)
                         .put("run_at", runAt)
                         .put("repeat_mode", repeatMode)
                         .put("repeat_weekdays", repeatWeekdays and 0x7F)
@@ -564,7 +574,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appendSystemMessage("schedule_id is empty.")
             return
         }
-        val port = lxbPort.value.toIntOrNull() ?: run {
+        val port = currentLxbPortOrNull() ?: run {
             appendSystemMessage("Invalid lxb-core port, cannot update schedule.")
             return
         }
@@ -604,7 +614,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .put("package", packageName)
                         .put("start_page", startPage)
                         .put("trace_mode", "push")
-                        .put("trace_udp_port", TRACE_UDP_PORT)
+                        .put("trace_udp_port", TRACE_PUSH_PORT)
                         .put("run_at", runAt)
                         .put("repeat_mode", repeatMode)
                         .put("repeat_weekdays", repeatWeekdays and 0x7F)
@@ -637,7 +647,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun removeScheduleOnDevice(scheduleId: String) {
-        val port = lxbPort.value.toIntOrNull() ?: run {
+        val port = currentLxbPortOrNull() ?: run {
             appendSystemMessage("Invalid lxb-core port, cannot remove schedule.")
             return
         }
@@ -732,7 +742,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Start a background job that listens for trace events pushed via UDP
+     * Start a background job that listens for trace events pushed via TCP
      * from lxb-core and maps them to chat messages.
      */
     private fun ensureTraceUdpListener(): Job {
@@ -741,14 +751,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return existing
         }
         val job = viewModelScope.launch(Dispatchers.IO) {
-            var socket: DatagramSocket? = null
+            var server: ServerSocket? = null
             try {
-                socket = DatagramSocket(TRACE_UDP_PORT)
-                val buffer = ByteArray(64 * 1024)
+                server = ServerSocket(TRACE_PUSH_PORT).apply {
+                    reuseAddress = true
+                    soTimeout = 1000
+                }
                 while (isActive) {
-                    val packet = DatagramPacket(buffer, buffer.size)
-                    socket.receive(packet)
-                    val text = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
+                    val client = try {
+                        server.accept()
+                    } catch (_: SocketTimeoutException) {
+                        continue
+                    }
+                    val text = client.use {
+                        runCatching {
+                            it.getInputStream().bufferedReader(Charsets.UTF_8).readLine()
+                        }.getOrNull()
+                    } ?: continue
                     val obj = runCatching { org.json.JSONObject(text) }.getOrNull() ?: continue
                     withContext(Dispatchers.Main) {
                         appendChatMessageFromTrace(obj)
@@ -757,7 +776,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 appendLog("[TRACE_PUSH] listener error: ${e.message}")
             } finally {
-                socket?.close()
+                server?.close()
             }
         }
         activeTraceJob = job
@@ -1267,8 +1286,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveConfig() {
+        val normalizedPort = normalizePortString(lxbPort.value)
+        if (normalizedPort != lxbPort.value) {
+            lxbPort.value = normalizedPort
+        }
         prefs.edit()
-            .putString(KEY_LXB_PORT, lxbPort.value)
+            .putString(KEY_LXB_PORT, normalizedPort)
             .putString(KEY_SERVER_IP, serverIp.value)
             .putString(KEY_SERVER_PORT, serverPort.value)
             .putString(KEY_LLM_BASE_URL, llmBaseUrl.value)
@@ -1278,6 +1301,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putBoolean(KEY_AUTO_LOCK_AFTER_TASK, autoLockAfterTask.value)
             .putString(KEY_UNLOCK_PIN, unlockPin.value)
             .apply()
+    }
+
+    private fun currentLxbPortOrNull(): Int? {
+        val p = lxbPort.value.trim().toIntOrNull() ?: return null
+        return if (p in 1..65535) p else null
+    }
+
+    private fun currentLxbPortOrDefault(): Int {
+        return currentLxbPortOrNull() ?: DEFAULT_LXB_PORT.toInt()
+    }
+
+    private fun persistNormalizedLxbPortIfNeeded() {
+        val normalized = normalizePortString(lxbPort.value)
+        if (normalized != lxbPort.value) {
+            lxbPort.value = normalized
+            prefs.edit().putString(KEY_LXB_PORT, normalized).apply()
+        }
     }
 
     private fun appendLog(line: String) {

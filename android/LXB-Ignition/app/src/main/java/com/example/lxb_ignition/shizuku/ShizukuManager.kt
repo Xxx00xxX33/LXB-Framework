@@ -296,14 +296,14 @@ class ShizukuManager(private val context: Context) {
             }
             log("JAR written to $TMP_JAR")
 
-            setState(State.STARTING, "Starting lxb-core (UDP :$port)...")
+            setState(State.STARTING, "Starting lxb-core (TCP :$port)...")
             val jvmOpts = buildServerJvmOpts()
             log("Server storage base: ${getLxbStateBaseDir()}")
             val result = svc.startServerWithJvmOpts(TMP_JAR, SERVER_CLASS, port, jvmOpts)
 
             if (result.startsWith("OK")) {
                 logBytesRead = 0L
-                setState(State.RUNNING, "Server running (UDP :$port)")
+                setState(State.RUNNING, "Server running (TCP :$port)")
                 result.removePrefix("OK\n")
                     .lines()
                     .filter { it.isNotEmpty() }

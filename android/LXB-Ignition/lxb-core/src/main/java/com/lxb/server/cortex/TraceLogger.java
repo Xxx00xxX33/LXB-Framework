@@ -2,9 +2,9 @@ package com.lxb.server.cortex;
 
 import com.lxb.server.cortex.json.Json;
 
-import java.net.DatagramPacket;
-import java.net.DatagramSocket;
+import java.net.InetSocketAddress;
 import java.net.InetAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -27,7 +27,7 @@ public class TraceLogger {
     private final SimpleDateFormat tsFmt =
             new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US);
 
-    // Optional push target for streaming selected trace events over UDP.
+    // Optional push target for streaming selected trace events over TCP.
     // For now this is used by the Cortex FSM to push per-task progress to
     // the Android front-end chat UI.
     private String pushHost;
@@ -97,7 +97,7 @@ public class TraceLogger {
         int n = Math.max(1, Math.min(maxLines, capacity));
         int skip = Math.max(0, ring.size() - n);
 
-        // UDP/frame payload has an upper bound; keep response safely under that limit.
+        // Frame payload has an upper bound; keep response safely under that limit.
         // Use UTF-8 byte size (not char count) to avoid underestimating non-ASCII lines.
         final int maxBytes = 60000;
 
@@ -156,7 +156,7 @@ public class TraceLogger {
     }
 
     /**
-     * Best-effort UDP push of a single trace JSON object. Only events that
+     * Best-effort TCP push of a single trace JSON object. Only events that
      * belong to the currently attached task_id are sent.
      */
     private void pushIfNeeded(Map<String, Object> o) {
@@ -185,15 +185,14 @@ public class TraceLogger {
             if (data.length == 0 || data.length > 60000) {
                 return;
             }
-            DatagramPacket packet = new DatagramPacket(
-                    data,
-                    data.length,
-                    InetAddress.getByName(host),
-                    port
-            );
-            DatagramSocket socket = new DatagramSocket();
+
+            Socket socket = new Socket();
             try {
-                socket.send(packet);
+                socket.connect(new InetSocketAddress(InetAddress.getByName(host), port), 300);
+                socket.setSoTimeout(300);
+                socket.getOutputStream().write(data);
+                socket.getOutputStream().write('\n');
+                socket.getOutputStream().flush();
             } finally {
                 socket.close();
             }

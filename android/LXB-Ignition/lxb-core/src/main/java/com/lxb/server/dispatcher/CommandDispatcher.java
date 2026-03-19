@@ -1,22 +1,18 @@
 package com.lxb.server.dispatcher;
 
 import com.lxb.server.daemon.CircuitBreaker;
-import com.lxb.server.daemon.SequenceTracker;
 import com.lxb.server.cortex.CortexFacade;
 import com.lxb.server.execution.ExecutionEngine;
 import com.lxb.server.perception.PerceptionEngine;
 import com.lxb.server.protocol.CommandIds;
 import com.lxb.server.protocol.FrameCodec;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-
 /**
  * Command dispatcher.
  *
  * Design note:
  * - No session/connection state is kept here.
- * - UDP duplicate handling is done with a short-lived frame fingerprint window.
+ * - Transport-level retry/dedup is not handled here (TCP control channel).
  */
 public class CommandDispatcher {
 
@@ -24,28 +20,16 @@ public class CommandDispatcher {
 
     private final PerceptionEngine perceptionEngine;
     private final ExecutionEngine executionEngine;
-    private final SequenceTracker sequenceTracker;
     private final CircuitBreaker circuitBreaker;
     private final CortexFacade cortexFacade;
-
-    // ACK cache keyed by frame fingerprint (for UDP retry dedup only).
-    private final Map<SequenceTracker.FrameKey, byte[]> ackCache =
-            new LinkedHashMap<SequenceTracker.FrameKey, byte[]>(128, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<SequenceTracker.FrameKey, byte[]> eldest) {
-                    return size() > 128;
-                }
-            };
 
     public CommandDispatcher(
             PerceptionEngine perceptionEngine,
             ExecutionEngine executionEngine,
-            SequenceTracker sequenceTracker,
             CircuitBreaker circuitBreaker
     ) {
         this.perceptionEngine = perceptionEngine;
         this.executionEngine = executionEngine;
-        this.sequenceTracker = sequenceTracker;
         this.circuitBreaker = circuitBreaker;
         this.cortexFacade = new CortexFacade(perceptionEngine, executionEngine);
     }
@@ -54,38 +38,13 @@ public class CommandDispatcher {
      * Dispatch command and return ACK frame.
      */
     public byte[] dispatch(FrameCodec.FrameInfo frame, byte[] payload, String peerTag) {
-        SequenceTracker.FrameKey frameKey = new SequenceTracker.FrameKey(frame.seq, frame.cmd, payload, peerTag);
-
-        // 0) Strong duplicate protection: if we have a cached ACK for this exact
-        //    frame fingerprint (same seq + cmd + payload hash), reuse it directly.
-        //    This handles late UDP retries that arrive AFTER a long-running
-        //    command has finished, and avoids re-executing expensive commands
-        //    like CORTEX_ROUTE_RUN twice.
-        byte[] cachedAck = ackCache.get(frameKey);
-        if (cachedAck != null) {
-            System.out.println(TAG + " Cached ACK hit, skipping re-dispatch for seq="
-                    + frame.seq + ", cmd=0x" + String.format("%02X", frame.cmd & 0xFF));
-            return cachedAck;
-        }
-
-        // 1) Short-lived duplicate detection (same seq+cmd+payload fingerprint)
-        if (sequenceTracker.isDuplicate(frame.seq, frame.cmd, payload, peerTag)) {
-            System.out.println(TAG + " Duplicate frame detected, returning cached ACK");
-            byte[] cached = ackCache.get(frameKey);
-            if (cached != null) {
-                return cached;
-            }
-            // Defensive fallback for duplicate-without-cache:
-            return buildAck(frame.seq, CommandIds.CMD_ACK, new byte[0]);
-        }
-
-        // 2) Circuit breaker
+        // 1) Circuit breaker
         if (circuitBreaker.shouldReject()) {
             System.out.println(TAG + " Circuit breaker triggered, rejecting");
             return buildErrorAck(frame.seq, (byte) 0xFF);
         }
 
-        // 3) Route command
+        // 2) Route command
         byte[] response;
         try {
             switch (frame.cmd) {
@@ -163,6 +122,11 @@ public class CommandDispatcher {
                 case CommandIds.CMD_SCREENSHOT:
                     response = perceptionEngine.handleScreenshot();
                     break;
+                case CommandIds.CMD_IMG_REQ:
+                    // Fragmented screenshot protocol is UDP-specific legacy.
+                    // TCP clients should use CMD_SCREENSHOT directly.
+                    response = new byte[]{0x00};
+                    break;
 
                 // Cortex/Map debug layer (bootstrap)
                 case CommandIds.CMD_MAP_SET_GZ:
@@ -214,9 +178,8 @@ public class CommandDispatcher {
                     response = new byte[]{0x00};
             }
 
-            // 4) Build ACK and cache by frame fingerprint
+            // 3) Build ACK
             byte[] ack = buildAck(frame.seq, CommandIds.CMD_ACK, response);
-            ackCache.put(frameKey, ack);
             return ack;
 
         } catch (Exception e) {

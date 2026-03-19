@@ -2,22 +2,20 @@ package com.example.lxb_ignition.service
 
 import com.lxb.server.protocol.CommandIds
 import com.lxb.server.protocol.FrameCodec
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.Closeable
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Minimal LXB-Link client implementation running inside the APK.
+ * Minimal LXB-Link TCP client used by APK.
  *
- * It talks to lxb-core Main UDP server on localhost using the same FrameCodec
- * as Python client, but with a simplified reliability model:
- *  - one request -> one ACK frame
- *  - no retries / no multi-channel scheduling
- *
- * This is enough for triggering end-side Cortex FSM from the APK.
+ * Protocol model:
+ * - one request frame -> one ACK frame
+ * - no transport-layer retry/dedup on client side
  */
 class LocalLinkClient(
     private val host: String,
@@ -28,11 +26,19 @@ class LocalLinkClient(
     companion object {
         // Keep sequence monotonic across all client instances in this process.
         private val GLOBAL_SEQ = AtomicInteger(1)
+        private const val DEFAULT_PORT = 12345
     }
 
-    private val socket: DatagramSocket = DatagramSocket().apply {
+    private val targetPort: Int = if (port in 1..65535) port else DEFAULT_PORT
+
+    private val socket: Socket = Socket().apply {
+        connect(InetSocketAddress(host, targetPort), defaultTimeoutMs)
         soTimeout = defaultTimeoutMs
+        tcpNoDelay = true
     }
+
+    private val input = BufferedInputStream(socket.getInputStream())
+    private val output = BufferedOutputStream(socket.getOutputStream())
 
     @Synchronized
     @Throws(Exception::class)
@@ -42,10 +48,6 @@ class LocalLinkClient(
 
     /**
      * Send one command and return the ACK payload.
-     *
-     * @param cmd CommandIds.CMD_*
-     * @param payload Command payload (binary)
-     * @param timeoutMs Receive timeout in milliseconds.
      */
     @Synchronized
     @Throws(Exception::class)
@@ -58,34 +60,58 @@ class LocalLinkClient(
         val seq = nextSeq()
         val frame = FrameCodec.encode(seq, cmd, payload)
 
-        val address = InetAddress.getByName(host)
-        val packet = DatagramPacket(frame, frame.size, address, port)
-
         socket.soTimeout = timeoutMs
-        socket.send(packet)
+        output.write(frame)
+        output.flush()
 
-        val buf = ByteArray(64 * 1024)
-        val respPacket = DatagramPacket(buf, buf.size)
-        try {
-            socket.receive(respPacket)
+        val respData = try {
+            readFrame(timeoutMs)
         } catch (e: SocketTimeoutException) {
-            throw RuntimeException("UDP recv timeout for cmd=0x${String.format("%02X", cmd)}", e)
+            throw RuntimeException("TCP recv timeout for cmd=0x${String.format("%02X", cmd)}", e)
         }
 
-        val respData = respPacket.data.copyOf(respPacket.length)
         val decoded = FrameCodec.decode(respData)
 
         val cmdInt = decoded.cmd.toInt() and 0xFF
         val ackInt = CommandIds.CMD_ACK.toInt() and 0xFF
         if (cmdInt != ackInt) {
             throw RuntimeException(
-                "Unexpected cmd in response: 0x${String.format("%02X", decoded.cmd)} (expected ACK 0x${String.format("%02X", CommandIds.CMD_ACK)})"
+                "Unexpected cmd in response: 0x${String.format("%02X", decoded.cmd)} " +
+                    "(expected ACK 0x${String.format("%02X", CommandIds.CMD_ACK)})"
             )
         }
         if (decoded.seq != seq) {
             throw RuntimeException("ACK seq mismatch: got ${decoded.seq}, expected $seq")
         }
         return decoded.payload
+    }
+
+    @Throws(Exception::class)
+    private fun readFrame(timeoutMs: Int): ByteArray {
+        socket.soTimeout = timeoutMs
+
+        val header = ByteArray(FrameCodec.HEADER_SIZE)
+        readFully(header, 0, FrameCodec.HEADER_SIZE)
+
+        val payloadLength = ((header[8].toInt() and 0xFF) shl 8) or (header[9].toInt() and 0xFF)
+        val totalLength = FrameCodec.HEADER_SIZE + payloadLength + FrameCodec.CRC_SIZE
+
+        val frame = ByteArray(totalLength)
+        System.arraycopy(header, 0, frame, 0, FrameCodec.HEADER_SIZE)
+        readFully(frame, FrameCodec.HEADER_SIZE, payloadLength + FrameCodec.CRC_SIZE)
+        return frame
+    }
+
+    @Throws(Exception::class)
+    private fun readFully(buf: ByteArray, offset: Int, length: Int) {
+        var read = 0
+        while (read < length) {
+            val n = input.read(buf, offset + read, length - read)
+            if (n < 0) {
+                throw RuntimeException("TCP socket closed while reading frame")
+            }
+            read += n
+        }
     }
 
     private fun nextSeq(): Int {
@@ -99,6 +125,9 @@ class LocalLinkClient(
     }
 
     override fun close() {
-        socket.close()
+        try {
+            socket.close()
+        } catch (_: Exception) {
+        }
     }
 }

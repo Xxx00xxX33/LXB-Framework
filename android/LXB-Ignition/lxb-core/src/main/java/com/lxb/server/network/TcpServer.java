@@ -1,0 +1,125 @@
+package com.lxb.server.network;
+
+import com.lxb.server.protocol.FrameCodec;
+
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
+/**
+ * TCP server wrapper for framed LXB-Link traffic.
+ *
+ * Transport responsibilities:
+ * - Accept client sockets
+ * - Read exactly one protocol frame from stream
+ * - Write encoded response frame back to client
+ */
+public class TcpServer {
+
+    private ServerSocket serverSocket;
+    private boolean running = false;
+
+    public void listen(int port) throws IOException {
+        serverSocket = new ServerSocket(port);
+        serverSocket.setReuseAddress(true);
+        running = true;
+        System.out.println("[TCP] Listening on port " + port);
+    }
+
+    public ClientConnection accept(int timeoutMs) throws IOException {
+        if (!running || serverSocket == null) {
+            throw new IllegalStateException("Server not started");
+        }
+        serverSocket.setSoTimeout(timeoutMs);
+        Socket socket = serverSocket.accept();
+        socket.setTcpNoDelay(true);
+        return new ClientConnection(socket);
+    }
+
+    public void close() {
+        running = false;
+        if (serverSocket != null && !serverSocket.isClosed()) {
+            try {
+                serverSocket.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    public static final class ClientConnection implements AutoCloseable {
+        private final Socket socket;
+        private final InputStream in;
+        private final OutputStream out;
+
+        public ClientConnection(Socket socket) throws IOException {
+            this.socket = socket;
+            this.in = socket.getInputStream();
+            this.out = socket.getOutputStream();
+        }
+
+        public String peerTag() {
+            return socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
+        }
+
+        /**
+         * Read one full frame from TCP stream.
+         *
+         * @return Complete frame bytes, or null when peer closed cleanly.
+         */
+        public byte[] readFrame(int timeoutMs) throws IOException {
+            socket.setSoTimeout(timeoutMs);
+
+            byte[] header = new byte[FrameCodec.HEADER_SIZE];
+            int first = in.read();
+            if (first < 0) {
+                return null;
+            }
+            header[0] = (byte) first;
+            readFully(in, header, 1, FrameCodec.HEADER_SIZE - 1);
+
+            ByteBuffer hb = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN);
+            hb.getShort(); // magic
+            hb.get();      // version
+            hb.getInt();   // seq
+            hb.get();      // cmd
+            int payloadLen = hb.getShort() & 0xFFFF;
+
+            int totalLen = FrameCodec.HEADER_SIZE + payloadLen + FrameCodec.CRC_SIZE;
+            byte[] frame = new byte[totalLen];
+            System.arraycopy(header, 0, frame, 0, FrameCodec.HEADER_SIZE);
+            readFully(in, frame, FrameCodec.HEADER_SIZE, payloadLen + FrameCodec.CRC_SIZE);
+            return frame;
+        }
+
+        public void writeFrame(byte[] frame) throws IOException {
+            out.write(frame);
+            out.flush();
+        }
+
+        @Override
+        public void close() {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    private static void readFully(InputStream in, byte[] buf, int off, int len) throws IOException {
+        int read = 0;
+        while (read < len) {
+            int n = in.read(buf, off + read, len - read);
+            if (n < 0) {
+                throw new EOFException("Unexpected EOF while reading frame");
+            }
+            read += n;
+        }
+    }
+}
+
