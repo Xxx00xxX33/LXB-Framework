@@ -1,181 +1,142 @@
-<div align="center">
-
 # LXB-Framework
 
-### An Android Automation Framework with Visual-Language Model Integration
+Android on-device automation framework (current focus: **APK-first workflow**).
 
-**Route-Then-Act**: Build navigation maps, route to target pages, then execute tasks with VLM guidance.
+[English](README.md) | [中文](README.zh.md)
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![GitHub Stars](https://img.shields.io/github/stars/wuwei-crg/LXB-Framework.svg?style=social)](https://github.com/wuwei-crg/LXB-Framework)
-[![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](docs/en)
+This project has moved from the old "PC + Android linked console" style to a **phone-side execution model**:
+- User enters a task directly in the Android app
+- FSM runs on device
+- LLM/VLM planning and action loop run from device-side service
+- Task/schedule management is handled inside the app
 
-Paper: [TechRxiv](https://doi.org/10.36227/techrxiv.177273656.63195814/v1)
-
----
-
-[English](README.md) | [中文文档](README.zh.md)
-
-</div>
+Status: **Alpha / fast iteration**
 
 ---
 
-> **A note on current scope and limitations**
->
-> The framework is already reasonably effective at building navigation maps for mainstream apps with relatively complete XML accessibility structures (e.g., Bilibili, Xiaohongshu, and, in some scenarios, Taobao), but it still has clear limitations: map building is weak for apps with limited usable XML structure (e.g., WeChat), popup handling is not yet robust enough (we can mainly record popups observed during mapping, while reliable closure via recorded locators still needs continuous validation), and locator construction is not yet resilient to dynamic text (e.g., rotating search hints or status-dependent strings such as "Messages, 2 unread", which can later cause matching failures). These are known shortcomings of the current version, and we will continue improving them in subsequent iterations.
+## Core Capabilities
+
+### 1) Map-Centric Route-Then-Act
+
+LXB builds reusable app navigation maps, then executes automation in two stages:
+- **Route**: deterministic navigation from entry page to target page
+- **Act**: VLM-guided UI operations only after arriving at target context
+
+This design reduces random trial-and-error actions and improves task reproducibility.
+
+### 2) Shizuku + app_process Background Runtime
+
+LXB launches `lxb-core` through **Shizuku + app_process** instead of relying on:
+- strict `adb`-dependent workflows, or
+- pure APK foreground lifecycle only
+
+Practical result:
+- better long-running stability on-device
+- supports scheduler-driven auto-run tasks in real usage
+- survives common app lifecycle interruptions better than APK-only execution
+
+---
+
+## Quick Start (Android Only)
+
+### 1. Install Shizuku
+
+- GitHub: https://github.com/RikkaApps/Shizuku
+- Follow Shizuku official guide to start Shizuku service on your device.
+
+Notes:
+- Shizuku must be running before LXB can start its backend service.
+- On Xiaomi/MIUI, set LXB battery policy to `No restrictions` to avoid background kill.
+
+### 2. Install LXB-Ignition APK
+
+- Download from Releases: https://github.com/wuwei-crg/LXB-Framework/releases
+- Install `lxb-ignition-vX.Y.Z.apk`.
+
+### 3. Grant permission and start backend
+
+In LXB app:
+1. Open app and grant Shizuku permission when prompted.
+2. Go to Home page.
+3. Tap `Start Service` (this starts the device-side lxb-core process through Shizuku).
+4. Confirm service status is running.
+
+### 4. Configure model endpoint
+
+In Config pages, set:
+- API base URL
+- API key
+- LLM model
+- VLM model
+
+Save config, then run a simple task (for example: "Open Bilibili and post a status update draft").
+
+---
+
+## Current Product Shape
+
+- **Map-driven Route-Then-Act execution**
+- **Shizuku/app_process-backed background runtime for scheduled tasks**
+- FSM pipeline (init -> app resolve -> route plan -> routing -> vision act)
+- Task queue + schedule execution
+- Trace/status messages pushed back to app UI
+- On-device persistence for config/task/schedule data
 
 ---
 
 ## Demo
 
-### Building a Navigation Map
-
-LXB-MapBuilder explores the app autonomously and constructs a reusable navigation graph.
+### 1) MapBuilder - Navigation Map Building
 
 <img src="resources/map_building (speed x 5).gif" alt="Map Building (5x speed)" width="700">
 
-The resulting graph can be visualized and inspected:
+### 2) MapBuilder - Graph Visualization
 
 <img src="resources/map_visualization.gif" alt="Map Visualization" width="700">
 
-### Route-Then-Act in Action
+### 3) Auto Run - Order Coffee
 
-Once the map is built, LXB-Cortex handles tasks in three phases:
+`[GIF_PLACEHOLDER_AUTO_RUN_ORDER_COFFEE]`
 
-**Phase 1 — Init & Planning**: LLM generates a route plan from app state (text-only, no screenshot needed).
+### 4) Auto Run - Xuexi Qiangguo Quiz Completion
 
-<img src="resources/Route-then-Act-Init-and-Planning (speed x 2).gif" alt="Init and Planning (2x speed)" width="700">
-
-**Phase 2 — Routing**: Deterministic BFS navigation to the target page. Zero VLM calls.
-
-<img src="resources/Route-then_act_routing(real time).gif" alt="Routing (real time)" width="700">
-
-**Phase 3 — Acting**: VLM-guided task execution on the target page.
-
-<img src="resources/Route-then-act-acting(speed x 5)).gif" alt="Acting (5x speed)" width="700">
+`[GIF_PLACEHOLDER_AUTO_RUN_XXQG_QUIZ]`
 
 ---
 
-## Overview
+## Architecture (Placeholder)
 
-LXB-Framework is an engineering system for Android automation with two core goals:
+TODO: update with new architecture diagram.
 
-1. **Build reusable navigation maps** of Android apps automatically (LXB-MapBuilder)
-2. **Route to target pages first, then execute tasks** using VLM guidance (LXB-Cortex)
+`[ARCHITECTURE_PLACEHOLDER_V2]`
 
-### Key Features
+Proposed diagram blocks:
+- Android UI layer (Chat / Config / Tasks / Schedules)
+- Command client
+- lxb-core service (FSM, TaskManager, Scheduler, Trace push)
+- Shizuku bridge
+- Android system interaction (input, screenshot, activity, app lifecycle)
+- Remote model endpoint (LLM/VLM)
 
-- **Map-Driven Automation**: Build app navigation maps once, reuse for multiple tasks
-- **Route-Then-Act Pattern**: Navigate deterministically, then execute with AI guidance
-- **VLM-XML Fusion**: Combine vision-language model understanding with XML hierarchy for reliable element location
-- **Retrieval-First Positioning**: Use resource_id/text over hardcoded coordinates
-- **Web Console**: Unified interface for debugging, mapping, and task execution
+---
 
-## Architecture
+## For Developers
 
-![LXB-Framework Architecture](resources/architecture.svg)
-
-## Modules
-
-| Module | Description | Code Path |
-|--------|-------------|-----------|
-| **LXB-Link** | Device communication client with reliable UDP protocol | `src/lxb_link/` |
-| **LXB-Server** | Android-side service for input injection and UI perception | `android/LXB-Ignition/` |
-| **LXB-MapBuilder** | Automatic app navigation map builder using VLM + XML | `src/auto_map_builder/` |
-| **LXB-Cortex** | Route-Then-Act automation engine with FSM runtime | `src/cortex/` |
-| **LXB-WebConsole** | Web interface for debugging and task execution | `web_console/` |
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.9+
-- Android device with Shizuku installed
-- VLM API key (any OpenAI-compatible endpoint)
-
-### Installation
+Android build:
 
 ```bash
-# Clone the repository
-git clone https://github.com/wuwei-crg/LXB-Framework.git
-cd LXB-Framework
-
-# Install dependencies
-pip install -r requirements.txt
+cd android/LXB-Ignition
+./gradlew :app:installDebug
 ```
 
-### Launch Web Console
+Release build (local script):
 
 ```bash
-cd web_console
-python app.py
+powershell -ExecutionPolicy Bypass -File .\.release_local\release\build_release.ps1 -Version X.Y.Z
 ```
 
-Then open `http://localhost:5000/` in your browser.
-
-### Release Assets
-
-Each release provides:
-- `lxb-ignition-vX.Y.Z.apk`
-- `lxb-framework-core-vX.Y.Z.zip`
-- `lxb-framework-sample-maps-vX.Y.Z.zip` (sample maps for quick verification/demo)
-
-## Design Philosophy
-
-### Route-Then-Act
-
-Instead of using VLM for every action, LXB-Framework separates navigation from execution:
-
-1. **Build a map** of the app's navigation structure
-2. **Route deterministically** to the target page using BFS — zero VLM calls
-3. **Execute tasks** on the target page with VLM guidance
-
-![LXB-Cortex State Machine](resources/cortex_state_machine.svg)
-
-This approach reduces VLM API calls, increases reliability, and enables task reproducibility.
-
-### VLM-XML Fusion
-
-- **VLM** provides semantic understanding (what is this element?)
-- **XML** provides precise positioning (resource_id, bounds)
-- **Fusion** aligns VLM detections to XML nodes via point-containment matching
-
-![VLM-XML Fusion Engine](resources/fusion_engine.svg)
-
-### Retrieval-First Positioning
-
-Elements are located using stable semantic attributes (resource_id, content description) rather than hardcoded coordinates, ensuring reliability across different devices and screen sizes.
-
-## Project Structure
-
-```text
-LXB-Framework/
-├── android/LXB-Ignition/    # Android service (Shizuku)
-├── docs/
-│   ├── zh/                  # Chinese documentation
-│   └── en/                  # English documentation
-├── examples/                # Usage examples
-├── resources/               # Architecture diagrams and demo GIFs
-├── src/
-│   ├── cortex/              # Route-Then-Act engine
-│   ├── auto_map_builder/    # Map building engine
-│   └── lxb_link/            # Device communication
-└── web_console/             # Web interface
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-<div align="center">
-
-**[Documentation](docs/en)** | **[Examples](examples/)** | **[Issues](https://github.com/wuwei-crg/LXB-Framework/issues)**
-
-</div>
+MIT. See [LICENSE](LICENSE).
