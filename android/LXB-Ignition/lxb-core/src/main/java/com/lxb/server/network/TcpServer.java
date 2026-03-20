@@ -9,8 +9,6 @@ import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 
 /**
  * TCP server wrapper for framed LXB-Link traffic.
@@ -75,25 +73,36 @@ public class TcpServer {
         public byte[] readFrame(int timeoutMs) throws IOException {
             socket.setSoTimeout(timeoutMs);
 
-            byte[] header = new byte[FrameCodec.HEADER_SIZE];
+            byte[] prefix = new byte[3];
             int first = in.read();
             if (first < 0) {
                 return null;
             }
-            header[0] = (byte) first;
-            readFully(in, header, 1, FrameCodec.HEADER_SIZE - 1);
+            prefix[0] = (byte) first;
+            readFully(in, prefix, 1, 2); // magic[1] + version[1]
 
-            ByteBuffer hb = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN);
-            hb.getShort(); // magic
-            hb.get();      // version
-            hb.getInt();   // seq
-            hb.get();      // cmd
-            int payloadLen = hb.getShort() & 0xFFFF;
+            int headerSize;
+            try {
+                headerSize = FrameCodec.headerSizeForVersion(prefix[2]);
+            } catch (FrameCodec.ProtocolException e) {
+                throw new IOException("Invalid frame version in stream header", e);
+            }
 
-            int totalLen = FrameCodec.HEADER_SIZE + payloadLen + FrameCodec.CRC_SIZE;
+            byte[] header = new byte[headerSize];
+            System.arraycopy(prefix, 0, header, 0, 3);
+            readFully(in, header, 3, headerSize - 3);
+
+            int payloadLen;
+            try {
+                payloadLen = FrameCodec.parsePayloadLengthFromHeader(header);
+            } catch (FrameCodec.ProtocolException e) {
+                throw new IOException("Invalid stream frame header", e);
+            }
+
+            int totalLen = headerSize + payloadLen + FrameCodec.CRC_SIZE;
             byte[] frame = new byte[totalLen];
-            System.arraycopy(header, 0, frame, 0, FrameCodec.HEADER_SIZE);
-            readFully(in, frame, FrameCodec.HEADER_SIZE, payloadLen + FrameCodec.CRC_SIZE);
+            System.arraycopy(header, 0, frame, 0, headerSize);
+            readFully(in, frame, headerSize, payloadLen + FrameCodec.CRC_SIZE);
             return frame;
         }
 
@@ -122,4 +131,3 @@ public class TcpServer {
         }
     }
 }
-

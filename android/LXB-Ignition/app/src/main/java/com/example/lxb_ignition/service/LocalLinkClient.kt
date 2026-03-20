@@ -90,15 +90,22 @@ class LocalLinkClient(
     private fun readFrame(timeoutMs: Int): ByteArray {
         socket.soTimeout = timeoutMs
 
-        val header = ByteArray(FrameCodec.HEADER_SIZE)
-        readFully(header, 0, FrameCodec.HEADER_SIZE)
+        val prefix = ByteArray(3)
+        readFully(prefix, 0, 3) // magic(2) + version(1)
 
-        val payloadLength = ((header[8].toInt() and 0xFF) shl 8) or (header[9].toInt() and 0xFF)
-        val totalLength = FrameCodec.HEADER_SIZE + payloadLength + FrameCodec.CRC_SIZE
+        val headerSize = FrameCodec.headerSizeForVersion(prefix[2])
+        val header = ByteArray(headerSize)
+        System.arraycopy(prefix, 0, header, 0, 3)
+        if (headerSize > 3) {
+            readFully(header, 3, headerSize - 3)
+        }
+
+        val payloadLength = FrameCodec.parsePayloadLengthFromHeader(header)
+        val totalLength = headerSize + payloadLength + FrameCodec.CRC_SIZE
 
         val frame = ByteArray(totalLength)
-        System.arraycopy(header, 0, frame, 0, FrameCodec.HEADER_SIZE)
-        readFully(frame, FrameCodec.HEADER_SIZE, payloadLength + FrameCodec.CRC_SIZE)
+        System.arraycopy(header, 0, frame, 0, headerSize)
+        readFully(frame, headerSize, payloadLength + FrameCodec.CRC_SIZE)
         return frame
     }
 
