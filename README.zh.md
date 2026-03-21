@@ -1,6 +1,6 @@
 ﻿# LXB-Framework
 
-![LXB Logo](resources/logo.jpg)
+<img src="resources/logo.jpg" alt="LXB Logo" width="180" />
 
 [English](README.md) | [中文](README.zh.md)
 
@@ -41,12 +41,6 @@
 ```bash
 cd android/LXB-Ignition
 ./gradlew :app:installDebug
-```
-
-## 维护者发布
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\.release_local\release\build_release.ps1 -Version X.Y.Z
 ```
 
 ## 许可证

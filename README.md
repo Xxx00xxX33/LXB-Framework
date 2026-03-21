@@ -1,6 +1,6 @@
 ﻿# LXB-Framework
 
-![LXB Logo](resources/logo.jpg)
+<img src="resources/logo.jpg" alt="LXB Logo" width="180" />
 
 [English](README.md) | [中文](README.zh.md)
 
@@ -41,12 +41,6 @@ Android-first mobile automation framework focused on **Route-Then-Act** executio
 ```bash
 cd android/LXB-Ignition
 ./gradlew :app:installDebug
-```
-
-## Release (Maintainer)
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\.release_local\release\build_release.ps1 -Version X.Y.Z
 ```
 
 ## License
