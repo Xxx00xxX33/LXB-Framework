@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.lxb_ignition.map.MapSyncManager
 import com.example.lxb_ignition.service.LocalLinkClient
 import com.example.lxb_ignition.service.TaskRuntimeService
 import com.example.lxb_ignition.shizuku.ShizukuManager
@@ -43,6 +44,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_AUTO_UNLOCK_BEFORE_ROUTE = "auto_unlock_before_route"
         private const val KEY_AUTO_LOCK_AFTER_TASK = "auto_lock_after_task"
         private const val KEY_UNLOCK_PIN = "unlock_pin"
+        private const val KEY_MAP_REPO_RAW_BASE_URL = "map_repo_raw_base_url"
+        private const val KEY_MAP_DEBUG_LOCAL_OVERRIDE = "map_debug_local_override"
+        private const val DEFAULT_MAP_REPO_RAW_BASE_URL = "https://raw.githubusercontent.com/wuwei-crg/LXB-MapRepo/main"
 
         // Local TCP port for trace push from lxb-core.
         private const val TRACE_PUSH_PORT = 23456
@@ -87,7 +91,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val autoUnlockBeforeRoute = MutableStateFlow(prefs.getBoolean(KEY_AUTO_UNLOCK_BEFORE_ROUTE, true))
     val autoLockAfterTask = MutableStateFlow(prefs.getBoolean(KEY_AUTO_LOCK_AFTER_TASK, true))
     val unlockPin = MutableStateFlow(prefs.getString(KEY_UNLOCK_PIN, "") ?: "")
+    val mapRepoRawBaseUrl = MutableStateFlow(
+        prefs.getString(KEY_MAP_REPO_RAW_BASE_URL, DEFAULT_MAP_REPO_RAW_BASE_URL)
+            ?: DEFAULT_MAP_REPO_RAW_BASE_URL
+    )
+    val mapDebugMode = MutableStateFlow(prefs.getBoolean(KEY_MAP_DEBUG_LOCAL_OVERRIDE, false))
+    val mapTargetPackage = MutableStateFlow("")
+    val mapTargetId = MutableStateFlow("")
     val llmTestResult = MutableStateFlow("")
+    val mapSyncResult = MutableStateFlow("")
 
     // Control tab
     val requirement = MutableStateFlow("")
@@ -162,6 +174,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
+    private val mapSyncManager = MapSyncManager(application, shizukuManager, httpClient)
 
     init {
         shizukuManager.setListener(object : ShizukuManager.Listener {
@@ -177,6 +190,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         shizukuManager.attach()
         // Migrate stale/invalid port values (e.g., "0") to default.
         persistNormalizedLxbPortIfNeeded()
+        // Startup map sync:
+        // - always sync stable lane
+        // - runtime map selection follows debug mode:
+        //   OFF => stable, ON => candidate when cached else stable
+        viewModelScope.launch(Dispatchers.IO) {
+            val msg = mapSyncManager.startupSyncStable(
+                rawBaseUrl = mapRepoRawBaseUrl.value.trim(),
+                debugModeEnabled = mapDebugMode.value
+            ).getOrElse { "startup stable sync skipped: ${it.message}" }
+            appendLog("[MAP] $msg")
+        }
     }
 
     // ----- Shizuku / lxb-core operations -----
@@ -1216,6 +1240,120 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun syncStableMapsNow() {
+        val base = mapRepoRawBaseUrl.value.trim()
+        if (base.isEmpty()) {
+            mapSyncResult.value = "Map repo raw base URL is empty."
+            appendSystemMessage("Map sync failed: empty raw base URL.")
+            return
+        }
+        saveConfig()
+        viewModelScope.launch(Dispatchers.IO) {
+            val msg = mapSyncManager.syncStableAndApplyAll(base, mapDebugMode.value).fold(
+                onSuccess = { r ->
+                    "Stable sync+apply done: indexed=${r.indexedCount}, applied=${r.appliedPackages}/${r.totalPackages}, failed=${r.failedPackages}"
+                },
+                onFailure = { e -> "Stable sync+apply failed: ${e.message}" }
+            )
+            withContext(Dispatchers.Main) {
+                mapSyncResult.value = msg
+                appendLog("[MAP] $msg")
+                appendSystemMessage(msg)
+            }
+        }
+    }
+
+    fun pullStableByIdentifierNow() {
+        val base = mapRepoRawBaseUrl.value.trim()
+        val pkg = mapTargetPackage.value.trim()
+        val mapId = mapTargetId.value.trim()
+        if (base.isEmpty()) {
+            mapSyncResult.value = "Map repo raw base URL is empty."
+            appendSystemMessage("Pull stable map failed: empty raw base URL.")
+            return
+        }
+        if (pkg.isEmpty() || mapId.isEmpty()) {
+            mapSyncResult.value = "Package and Map ID are required."
+            appendSystemMessage("Pull stable map failed: package/map_id is empty.")
+            return
+        }
+        saveConfig()
+        viewModelScope.launch(Dispatchers.IO) {
+            val msg = mapSyncManager.pullStableByIdentifier(base, pkg, mapId, mapDebugMode.value).fold(
+                onSuccess = { it },
+                onFailure = { e -> "Pull stable map failed: ${e.message}" }
+            )
+            withContext(Dispatchers.Main) {
+                mapSyncResult.value = msg
+                appendLog("[MAP] $msg")
+                appendSystemMessage(msg)
+            }
+        }
+    }
+
+    fun pullCandidateByIdentifierNow() {
+        val base = mapRepoRawBaseUrl.value.trim()
+        val pkg = mapTargetPackage.value.trim()
+        val mapId = mapTargetId.value.trim()
+        if (base.isEmpty()) {
+            mapSyncResult.value = "Map repo raw base URL is empty."
+            appendSystemMessage("Pull candidate map failed: empty raw base URL.")
+            return
+        }
+        if (pkg.isEmpty() || mapId.isEmpty()) {
+            mapSyncResult.value = "Package and Map ID are required."
+            appendSystemMessage("Pull candidate map failed: package/map_id is empty.")
+            return
+        }
+        saveConfig()
+        viewModelScope.launch(Dispatchers.IO) {
+            val msg = mapSyncManager.pullCandidateByIdentifier(base, pkg, mapId, mapDebugMode.value).fold(
+                onSuccess = { it },
+                onFailure = { e -> "Pull candidate map failed: ${e.message}" }
+            )
+            withContext(Dispatchers.Main) {
+                mapSyncResult.value = msg
+                appendLog("[MAP] $msg")
+                appendSystemMessage(msg)
+            }
+        }
+    }
+
+    fun checkActiveMapStatus() {
+        val pkg = mapTargetPackage.value.trim()
+        if (pkg.isEmpty()) {
+            mapSyncResult.value = "Package is required."
+            return
+        }
+        val msg = mapSyncManager.activeStatus(pkg)
+        mapSyncResult.value = msg
+        appendLog("[MAP] $msg")
+        appendSystemMessage(msg)
+    }
+
+    fun setMapDebugMode(enabled: Boolean) {
+        mapDebugMode.value = enabled
+        saveConfig()
+        viewModelScope.launch(Dispatchers.IO) {
+            val reconcile = mapSyncManager.setDebugModeAndReconcile(enabled).fold(
+                onSuccess = { r ->
+                    "reconciled ${r.switchedPackages}/${r.totalPackages}, failed=${r.failedPackages}"
+                },
+                onFailure = { e -> "reconcile skipped: ${e.message}" }
+            )
+            val msg = if (enabled) {
+                "Debug mode ON: candidate map will be used when available; fallback to stable. $reconcile"
+            } else {
+                "Debug mode OFF: stable map is enforced. $reconcile"
+            }
+            withContext(Dispatchers.Main) {
+                mapSyncResult.value = msg
+                appendLog("[MAP] $msg")
+                appendSystemMessage(msg)
+            }
+        }
+    }
+
     fun testLlmAndSyncConfig() {
         val baseUrl = llmBaseUrl.value.trim()
         val model = llmModel.value.trim()
@@ -1300,6 +1438,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putBoolean(KEY_AUTO_UNLOCK_BEFORE_ROUTE, autoUnlockBeforeRoute.value)
             .putBoolean(KEY_AUTO_LOCK_AFTER_TASK, autoLockAfterTask.value)
             .putString(KEY_UNLOCK_PIN, unlockPin.value)
+            .putString(KEY_MAP_REPO_RAW_BASE_URL, mapRepoRawBaseUrl.value)
+            .putBoolean(KEY_MAP_DEBUG_LOCAL_OVERRIDE, mapDebugMode.value)
             .apply()
     }
 

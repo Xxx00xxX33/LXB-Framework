@@ -1090,7 +1090,8 @@ fun ConfigTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             onOpenDeviceCore = { page = 1 },
             onOpenPcConsole = { page = 2 },
             onOpenLlm = { page = 3 },
-            onOpenUnlockPolicy = { page = 4 }
+            onOpenUnlockPolicy = { page = 4 },
+            onOpenMapSync = { page = 5 }
         )
         1 -> SingleConfigPage(
             title = "Device core server",
@@ -1119,6 +1120,13 @@ fun ConfigTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             onBack = { page = 0 }
         ) {
             UnlockPolicyConfigCard(viewModel)
+        }
+        5 -> SingleConfigPage(
+            title = "Map sync & source",
+            modifier = modifier,
+            onBack = { page = 0 }
+        ) {
+            MapSyncConfigCard(viewModel)
         }
     }
 }
@@ -1186,7 +1194,8 @@ fun ConfigOverviewPage(
     onOpenDeviceCore: () -> Unit,
     onOpenPcConsole: () -> Unit,
     onOpenLlm: () -> Unit,
-    onOpenUnlockPolicy: () -> Unit
+    onOpenUnlockPolicy: () -> Unit,
+    onOpenMapSync: () -> Unit
 ) {
     Column(
         modifier = modifier
@@ -1223,6 +1232,11 @@ fun ConfigOverviewPage(
             title = "Unlock & lock policy",
             description = "Auto unlock before route, auto lock after task, and lockscreen credentials.",
             onClick = onOpenUnlockPolicy
+        )
+        ConfigEntryCard(
+            title = "Map sync & source",
+            description = "Sync stable maps, pull map by identifier, and switch stable/candidate in debug mode.",
+            onClick = onOpenMapSync
         )
     }
 }
@@ -1526,6 +1540,122 @@ fun UnlockPolicyConfigCard(viewModel: MainViewModel) {
                     text = llmTestResult,
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun MapSyncConfigCard(viewModel: MainViewModel) {
+    val mapRepoRawBaseUrl by viewModel.mapRepoRawBaseUrl.collectAsState()
+    val mapDebugMode by viewModel.mapDebugMode.collectAsState()
+    val mapTargetPackage by viewModel.mapTargetPackage.collectAsState()
+    val mapTargetId by viewModel.mapTargetId.collectAsState()
+    val mapSyncResult by viewModel.mapSyncResult.collectAsState()
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Map sync & lane control", style = MaterialTheme.typography.titleSmall)
+            OutlinedTextField(
+                value = mapRepoRawBaseUrl,
+                onValueChange = { viewModel.mapRepoRawBaseUrl.value = it },
+                label = { Text("Map repo raw base URL") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                supportingText = {
+                    Text("e.g. https://raw.githubusercontent.com/wuwei-crg/LXB-MapRepo/main")
+                }
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Debug mode", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = if (mapDebugMode)
+                            "ON: use candidate map when available; fallback to stable."
+                        else
+                            "OFF: always use stable map.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+                    )
+                }
+                Switch(
+                    checked = mapDebugMode,
+                    onCheckedChange = { viewModel.setMapDebugMode(it) }
+                )
+            }
+            OutlinedTextField(
+                value = mapTargetPackage,
+                onValueChange = { viewModel.mapTargetPackage.value = it },
+                label = { Text("Package name") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                supportingText = {
+                    Text("Used for pull-by-identifier and active status.")
+                }
+            )
+            OutlinedTextField(
+                value = mapTargetId,
+                onValueChange = { viewModel.mapTargetId.value = it },
+                label = { Text("Map ID") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                supportingText = {
+                    Text("Required for stable/candidate pull by identifier.")
+                }
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { viewModel.syncStableMapsNow() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Sync Stable All")
+                }
+                OutlinedButton(
+                    onClick = { viewModel.pullStableByIdentifierNow() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Pull Stable by ID")
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { viewModel.pullCandidateByIdentifierNow() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Pull Candidate by ID")
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { viewModel.checkActiveMapStatus() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Show active")
+                }
+                OutlinedButton(
+                    onClick = { viewModel.saveConfig() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Save only")
+                }
+            }
+            if (mapSyncResult.isNotEmpty()) {
+                Text(
+                    text = mapSyncResult,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f)
                 )
             }
         }
