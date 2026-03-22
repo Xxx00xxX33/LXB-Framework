@@ -38,13 +38,16 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -79,28 +82,33 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun LXBIgnitionApp(viewModel: MainViewModel = viewModel()) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    val tabs = listOf("Control", "Tasks", "Config", "Logs")
+    val uiLang by viewModel.uiLang.collectAsState()
+    val i18n = remember(uiLang) { UiI18n(uiLang) }
 
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("LXB Ignition") }) },
-        bottomBar = {
-            NavigationBar {
-                tabs.forEachIndexed { index, label ->
-                    NavigationBarItem(
-                        selected = selectedTab == index,
-                        onClick = { selectedTab = index },
-                        icon = { Text(label.take(1), fontSize = 18.sp) },
-                        label = { Text(label) }
-                    )
+    CompositionLocalProvider(LocalUiI18n provides i18n) {
+        val tabs = listOf("Control", "Tasks", "Config", "Logs")
+        Scaffold(
+            topBar = { TopAppBar(title = { Text(tr("LXB Ignition")) }) },
+            bottomBar = {
+                NavigationBar {
+                    tabs.forEachIndexed { index, rawLabel ->
+                        val label = tr(rawLabel)
+                        NavigationBarItem(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            icon = { Text(label.take(1), fontSize = 18.sp) },
+                            label = { Text(label) }
+                        )
+                    }
                 }
             }
-        }
-    ) { innerPadding ->
-        when (selectedTab) {
-            0 -> ControlTab(viewModel, Modifier.padding(innerPadding))
-            1 -> TasksTab(viewModel, Modifier.padding(innerPadding))
-            2 -> ConfigTab(viewModel, Modifier.padding(innerPadding))
-            3 -> LogsTab(viewModel, Modifier.padding(innerPadding))
+        ) { innerPadding ->
+            when (selectedTab) {
+                0 -> ControlTab(viewModel, Modifier.padding(innerPadding))
+                1 -> TasksTab(viewModel, Modifier.padding(innerPadding))
+                2 -> ConfigTab(viewModel, Modifier.padding(innerPadding))
+                3 -> LogsTab(viewModel, Modifier.padding(innerPadding))
+            }
         }
     }
 }
@@ -150,7 +158,7 @@ fun ControlTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Task Session", style = MaterialTheme.typography.titleSmall)
+                Text(tr("Task Session"), style = MaterialTheme.typography.titleSmall)
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
@@ -169,7 +177,7 @@ fun ControlTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     OutlinedTextField(
                         value = requirement,
                         onValueChange = { viewModel.requirement.value = it },
-                        label = { Text("Describe what you want to do") },
+                        label = { Text(tr("Describe what you want to do")) },
                         modifier = Modifier.weight(1f),
                         maxLines = 3
                     )
@@ -180,7 +188,7 @@ fun ControlTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             onClick = { viewModel.runRequirementOnDevice() },
                             modifier = Modifier.height(40.dp)
                         ) {
-                            Text("Run")
+                            Text(tr("Run"))
                         }
                         OutlinedButton(
                             onClick = { viewModel.cancelCurrentTaskOnDevice() },
@@ -190,7 +198,7 @@ fun ControlTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                                 vertical = 4.dp
                             )
                         ) {
-                            Text("Stop", fontSize = 12.sp)
+                            Text(tr("Stop"), fontSize = 12.sp)
                         }
                     }
                 }
@@ -198,6 +206,100 @@ fun ControlTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         }
     }
 }
+
+private class UiI18n(private val lang: String) {
+    fun tr(text: String): String {
+        if (lang != "zh") return text
+        return ZhMap[text] ?: text
+    }
+}
+
+private val LocalUiI18n = staticCompositionLocalOf { UiI18n("en") }
+
+@Composable
+private fun tr(text: String): String = LocalUiI18n.current.tr(text)
+
+private val ZhMap = mapOf(
+    "LXB Ignition" to "LXB 点火",
+    "Control" to "控制",
+    "Tasks" to "任务",
+    "Config" to "配置",
+    "Logs" to "日志",
+    "Task Session" to "任务会话",
+    "Describe what you want to do" to "描述你想执行的任务",
+    "Run" to "运行",
+    "Stop" to "停止",
+    "Task Manager" to "任务管理",
+    "Refresh All" to "全部刷新",
+    "Schedules" to "定时任务",
+    "Recent Runs" to "最近执行",
+    "Back" to "返回",
+    "New" to "新建",
+    "Refresh" to "刷新",
+    "Task description (required)" to "任务描述（必填）",
+    "Pick Date" to "选择日期",
+    "Pick Time" to "选择时间",
+    "Name (optional)" to "名称（可选）",
+    "Package (optional)" to "包名（可选）",
+    "Start page (optional)" to "起始页（可选）",
+    "User playbook (optional)" to "用户操作文档（可选）",
+    "Save" to "保存",
+    "Submit" to "提交",
+    "Cancel" to "取消",
+    "Delete" to "删除",
+    "Select Time" to "选择时间",
+    "Hour" to "小时",
+    "Minute" to "分钟",
+    "OK" to "确定",
+    "Grant Shizuku" to "授予 Shizuku 权限",
+    "Start" to "启动",
+    "Config center" to "配置中心",
+    "Choose a category to configure. Each section opens a dedicated settings page." to "选择一个配置类别，每个类别会进入独立配置页面。",
+    "Language" to "语言",
+    "Language for app UI text." to "应用界面语言设置。",
+    "English" to "英文",
+    "Chinese" to "中文",
+    "Device core server" to "设备端核心服务",
+    "TCP port and related options for lxb-core running on this device." to "配置设备端 lxb-core 的 TCP 端口与相关选项。",
+    "PC web_console" to "PC 调试控制台",
+    "IP/port for optional PC-side web_console debugging." to "可选：配置 PC 端 web_console 调试地址。",
+    "LLM config (device-side)" to "设备端 LLM 配置",
+    "Base URL, API key and model for device-side LLM/VLM calls." to "配置设备端 LLM/VLM 调用的 Base URL、API Key 与模型。",
+    "Unlock & lock policy" to "解锁与锁屏策略",
+    "Auto unlock before route, auto lock after task, and lockscreen credentials." to "配置路由前自动解锁、任务后自动锁屏与锁屏凭据。",
+    "Map sync & source" to "地图同步与来源",
+    "Sync stable maps, pull map by identifier, and switch stable/candidate in debug mode." to "同步稳定地图、按标识拉取地图，并在调试模式切换 stable/candidate。",
+    "lxb-core server" to "lxb-core 服务",
+    "TCP port" to "TCP 端口",
+    "TCP port listened by lxb-core on device (default 12345)" to "设备端 lxb-core 监听的 TCP 端口（默认 12345）",
+    "Server IP" to "服务器 IP",
+    "IP address of the PC running web_console" to "运行 web_console 的 PC IP 地址",
+    "Server port" to "服务器端口",
+    "Flask port of web_console (default 5000)" to "web_console 的 Flask 端口（默认 5000）",
+    "API Base URL" to "API Base URL",
+    "API Key" to "API Key",
+    "Model" to "模型",
+    "Test LLM & sync to device" to "测试 LLM 并同步到设备",
+    "Save only" to "仅保存",
+    "Auto unlock before route" to "路由前自动解锁",
+    "Check screen state and unlock before app launch/routing." to "在应用启动/路由前检查屏幕状态并执行解锁。",
+    "Auto lock after task" to "任务后自动锁屏",
+    "Lock screen when task ends if the FSM unlocked it." to "若由 FSM 解锁，任务结束后自动锁屏。",
+    "Unlock PIN / password" to "解锁 PIN / 密码",
+    "Used only when swipe unlock is not enough." to "仅在上滑解锁不足时使用。",
+    "Sync to device" to "同步到设备",
+    "Map sync & lane control" to "地图同步与轨道控制",
+    "Map repo raw base URL" to "Map 仓库 Raw Base URL",
+    "Debug mode" to "调试模式",
+    "Package name" to "包名",
+    "Used for pull-by-identifier and active status." to "用于按标识拉取与查看当前生效状态。",
+    "Map ID" to "Map ID",
+    "Required for stable/candidate pull by identifier." to "stable/candidate 按标识拉取时必填。",
+    "Sync Stable All" to "同步全部 Stable",
+    "Pull Stable by ID" to "按 ID 拉取 Stable",
+    "Pull Candidate by ID" to "按 ID 拉取 Candidate",
+    "Show active" to "查看当前生效"
+)
 
 // Tab 2: Tasks
 
@@ -233,7 +335,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("Task Manager", style = MaterialTheme.typography.titleSmall)
+                    Text(tr("Task Manager"), style = MaterialTheme.typography.titleSmall)
                     OutlinedButton(
                         onClick = {
                             viewModel.refreshScheduleListOnDevice()
@@ -245,7 +347,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         ),
                         modifier = Modifier.height(32.dp)
                     ) {
-                        Text("Refresh All", fontSize = 12.sp)
+                        Text(tr("Refresh All"), fontSize = 12.sp)
                     }
                 }
 
@@ -258,7 +360,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text("Schedules", style = MaterialTheme.typography.bodyMedium)
+                        Text(tr("Schedules"), style = MaterialTheme.typography.bodyMedium)
                         Text(
                             text = "Manage scheduled tasks and create new ones. (${schedules.size})",
                             fontSize = 12.sp,
@@ -276,7 +378,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text("Recent Runs", style = MaterialTheme.typography.bodyMedium)
+                        Text(tr("Recent Runs"), style = MaterialTheme.typography.bodyMedium)
                         Text(
                             text = "View recent execution records. (${tasks.size})",
                             fontSize = 12.sp,
@@ -304,7 +406,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
                     ) {
-                        Text("Back", fontSize = 12.sp)
+                        Text(tr("Back"), fontSize = 12.sp)
                     }
                     Text(
                         text = "Schedules",
@@ -322,14 +424,14 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
                     ) {
-                        Text("New", fontSize = 12.sp)
+                        Text(tr("New"), fontSize = 12.sp)
                     }
                     OutlinedButton(
                         onClick = { viewModel.refreshScheduleListOnDevice() },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
                     ) {
-                        Text("Refresh", fontSize = 12.sp)
+                        Text(tr("Refresh"), fontSize = 12.sp)
                     }
                 }
 
@@ -392,7 +494,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
                     ) {
-                        Text("Back", fontSize = 12.sp)
+                        Text(tr("Back"), fontSize = 12.sp)
                     }
                     Text(
                         text = "Recent Runs",
@@ -406,7 +508,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
                     ) {
-                        Text("Refresh", fontSize = 12.sp)
+                        Text(tr("Refresh"), fontSize = 12.sp)
                     }
                 }
 
@@ -469,7 +571,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
                     ) {
-                        Text("Back", fontSize = 12.sp)
+                        Text(tr("Back"), fontSize = 12.sp)
                     }
                     Text(
                         text = if (isEditing) "Edit Schedule" else "Create Schedule",
@@ -488,7 +590,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         OutlinedTextField(
                             value = scheduleTask,
                             onValueChange = { viewModel.scheduleTask.value = it },
-                            label = { Text("Task description (required)") },
+                            label = { Text(tr("Task description (required)")) },
                             modifier = Modifier.fillMaxWidth(),
                             maxLines = 3
                         )
@@ -522,7 +624,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Pick Date")
+                                Text(tr("Pick Date"))
                             }
                             OutlinedButton(
                                 onClick = {
@@ -530,7 +632,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Pick Time")
+                                Text(tr("Pick Time"))
                             }
                         }
                         Text(
@@ -605,28 +707,28 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         OutlinedTextField(
                             value = scheduleName,
                             onValueChange = { viewModel.scheduleName.value = it },
-                            label = { Text("Name (optional)") },
+                            label = { Text(tr("Name (optional)")) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
                         OutlinedTextField(
                             value = schedulePackage,
                             onValueChange = { viewModel.schedulePackage.value = it },
-                            label = { Text("Package (optional)") },
+                            label = { Text(tr("Package (optional)")) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
                         OutlinedTextField(
                             value = scheduleStartPage,
                             onValueChange = { viewModel.scheduleStartPage.value = it },
-                            label = { Text("Start page (optional)") },
+                            label = { Text(tr("Start page (optional)")) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
                         OutlinedTextField(
                             value = schedulePlaybook,
                             onValueChange = { viewModel.schedulePlaybook.value = it },
-                            label = { Text("User playbook (optional)") },
+                            label = { Text(tr("User playbook (optional)")) },
                             modifier = Modifier.fillMaxWidth(),
                             maxLines = 4
                         )
@@ -646,7 +748,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text(if (isEditing) "Save" else "Submit")
+                                Text(tr(if (isEditing) "Save" else "Submit"))
                             }
                             OutlinedButton(
                                 onClick = {
@@ -655,7 +757,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Cancel")
+                                Text(tr("Cancel"))
                             }
                         }
                     }
@@ -727,7 +829,7 @@ fun ScheduleRow(
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                     modifier = Modifier.height(30.dp)
                 ) {
-                    Text("Delete", fontSize = 11.sp, color = scheme.error)
+                    Text(tr("Delete"), fontSize = 11.sp, color = scheme.error)
                 }
             }
         }
@@ -801,7 +903,7 @@ private fun WheelTimePickerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Select Time") },
+        title = { Text(tr("Select Time")) },
         text = {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -811,7 +913,7 @@ private fun WheelTimePickerDialog(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Hour", fontSize = 12.sp)
+                    Text(tr("Hour"), fontSize = 12.sp)
                     AndroidView(
                         factory = { ctx ->
                             NumberPicker(ctx).apply {
@@ -841,7 +943,7 @@ private fun WheelTimePickerDialog(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Minute", fontSize = 12.sp)
+                    Text(tr("Minute"), fontSize = 12.sp)
                     AndroidView(
                         factory = { ctx ->
                             NumberPicker(ctx).apply {
@@ -871,12 +973,12 @@ private fun WheelTimePickerDialog(
         },
         confirmButton = {
             Button(onClick = { onConfirm(hour, minute) }) {
-                Text("OK")
+                Text(tr("OK"))
             }
         },
         dismissButton = {
             OutlinedButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(tr("Cancel"))
             }
         }
     )
@@ -1044,7 +1146,7 @@ fun ServerControlRow(
                 ),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
             ) {
-                Text("Grant Shizuku")
+                Text(tr("Grant Shizuku"))
             }
         }
         OutlinedButton(
@@ -1058,7 +1160,7 @@ fun ServerControlRow(
                 vertical = 4.dp
             )
         ) {
-            Text("Start")
+            Text(tr("Start"))
         }
         OutlinedButton(
             onClick = onStop,
@@ -1071,7 +1173,7 @@ fun ServerControlRow(
                 vertical = 4.dp
             )
         ) {
-            Text("Stop")
+            Text(tr("Stop"))
         }
     }
 }
@@ -1087,6 +1189,7 @@ fun ConfigTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     when (page) {
         0 -> ConfigOverviewPage(
             modifier = modifier,
+            viewModel = viewModel,
             onOpenDeviceCore = { page = 1 },
             onOpenPcConsole = { page = 2 },
             onOpenLlm = { page = 3 },
@@ -1094,35 +1197,35 @@ fun ConfigTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             onOpenMapSync = { page = 5 }
         )
         1 -> SingleConfigPage(
-            title = "Device core server",
+            title = tr("Device core server"),
             modifier = modifier,
             onBack = { page = 0 }
         ) {
             LxbCoreConfigCard(viewModel)
         }
         2 -> SingleConfigPage(
-            title = "PC web_console",
+            title = tr("PC web_console"),
             modifier = modifier,
             onBack = { page = 0 }
         ) {
             PcConsoleConfigCard(viewModel)
         }
         3 -> SingleConfigPage(
-            title = "LLM config (device-side)",
+            title = tr("LLM config (device-side)"),
             modifier = modifier,
             onBack = { page = 0 }
         ) {
             LlmConfigCard(viewModel)
         }
         4 -> SingleConfigPage(
-            title = "Unlock & lock policy",
+            title = tr("Unlock & lock policy"),
             modifier = modifier,
             onBack = { page = 0 }
         ) {
             UnlockPolicyConfigCard(viewModel)
         }
         5 -> SingleConfigPage(
-            title = "Map sync & source",
+            title = tr("Map sync & source"),
             modifier = modifier,
             onBack = { page = 0 }
         ) {
@@ -1160,7 +1263,7 @@ fun LogPanel(logLines: List<String>, modifier: Modifier = Modifier) {
                 .padding(8.dp)
                 .fillMaxSize()
         ) {
-            Text("Logs", style = MaterialTheme.typography.titleSmall)
+            Text(tr("Logs"), style = MaterialTheme.typography.titleSmall)
             Spacer(modifier = Modifier.height(4.dp))
             LazyColumn(
                 state = listState,
@@ -1191,12 +1294,14 @@ fun LogPanel(logLines: List<String>, modifier: Modifier = Modifier) {
 @Composable
 fun ConfigOverviewPage(
     modifier: Modifier = Modifier,
+    viewModel: MainViewModel,
     onOpenDeviceCore: () -> Unit,
     onOpenPcConsole: () -> Unit,
     onOpenLlm: () -> Unit,
     onOpenUnlockPolicy: () -> Unit,
     onOpenMapSync: () -> Unit
 ) {
+    val uiLang by viewModel.uiLang.collectAsState()
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1204,38 +1309,60 @@ fun ConfigOverviewPage(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            "Config center",
+            tr("Config center"),
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface
         )
         Text(
-            text = "Choose a category to configure. Each section opens a dedicated settings page.",
+            text = tr("Choose a category to configure. Each section opens a dedicated settings page."),
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
         )
         ConfigEntryCard(
-            title = "Device core server",
-            description = "TCP port and related options for lxb-core running on this device.",
+            title = tr("Language"),
+            description = tr("Language for app UI text."),
+            onClick = {}
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { viewModel.setUiLang("en") },
+                    modifier = Modifier.weight(1f),
+                    enabled = uiLang != "en"
+                ) {
+                    Text(tr("English"))
+                }
+                OutlinedButton(
+                    onClick = { viewModel.setUiLang("zh") },
+                    modifier = Modifier.weight(1f),
+                    enabled = uiLang != "zh"
+                ) {
+                    Text(tr("Chinese"))
+                }
+            }
+        }
+        ConfigEntryCard(
+            title = tr("Device core server"),
+            description = tr("TCP port and related options for lxb-core running on this device."),
             onClick = onOpenDeviceCore
         )
         ConfigEntryCard(
-            title = "PC web_console",
-            description = "IP/port for optional PC-side web_console debugging.",
+            title = tr("PC web_console"),
+            description = tr("IP/port for optional PC-side web_console debugging."),
             onClick = onOpenPcConsole
         )
         ConfigEntryCard(
-            title = "LLM config (device-side)",
-            description = "Base URL, API key and model for device-side LLM/VLM calls.",
+            title = tr("LLM config (device-side)"),
+            description = tr("Base URL, API key and model for device-side LLM/VLM calls."),
             onClick = onOpenLlm
         )
         ConfigEntryCard(
-            title = "Unlock & lock policy",
-            description = "Auto unlock before route, auto lock after task, and lockscreen credentials.",
+            title = tr("Unlock & lock policy"),
+            description = tr("Auto unlock before route, auto lock after task, and lockscreen credentials."),
             onClick = onOpenUnlockPolicy
         )
         ConfigEntryCard(
-            title = "Map sync & source",
-            description = "Sync stable maps, pull map by identifier, and switch stable/candidate in debug mode.",
+            title = tr("Map sync & source"),
+            description = tr("Sync stable maps, pull map by identifier, and switch stable/candidate in debug mode."),
             onClick = onOpenMapSync
         )
     }
@@ -1245,7 +1372,8 @@ fun ConfigOverviewPage(
 fun ConfigEntryCard(
     title: String,
     description: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    content: (@Composable () -> Unit)? = null
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1266,6 +1394,10 @@ fun ConfigEntryCard(
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
             )
+            if (content != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                content()
+            }
         }
     }
 }
@@ -1297,7 +1429,7 @@ fun SingleConfigPage(
                 ),
                 modifier = Modifier.height(32.dp)
             ) {
-                Text("Back", fontSize = 12.sp)
+                Text(tr("Back"), fontSize = 12.sp)
             }
             Text(
                 text = title,
@@ -1321,17 +1453,17 @@ fun LxbCoreConfigCard(viewModel: MainViewModel) {
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("lxb-core server", style = MaterialTheme.typography.titleSmall)
+            Text(tr("lxb-core server"), style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = lxbPort,
                 onValueChange = { viewModel.lxbPort.value = it },
-                label = { Text("TCP port") },
+                label = { Text(tr("TCP port")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 supportingText = {
                     Text(
-                        "TCP port listened by lxb-core on device (default 12345)",
+                        tr("TCP port listened by lxb-core on device (default 12345)"),
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )
@@ -1351,17 +1483,17 @@ fun PcConsoleConfigCard(viewModel: MainViewModel) {
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("PC web_console", style = MaterialTheme.typography.titleSmall)
+            Text(tr("PC web_console"), style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = serverIp,
                 onValueChange = { viewModel.serverIp.value = it },
-                label = { Text("Server IP") },
+                label = { Text(tr("Server IP")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 supportingText = {
                     Text(
-                        "IP address of the PC running web_console",
+                        tr("IP address of the PC running web_console"),
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )
@@ -1370,13 +1502,13 @@ fun PcConsoleConfigCard(viewModel: MainViewModel) {
             OutlinedTextField(
                 value = serverPort,
                 onValueChange = { viewModel.serverPort.value = it },
-                label = { Text("Server port") },
+                label = { Text(tr("Server port")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 supportingText = {
                     Text(
-                        "Flask port of web_console (default 5000)",
+                        tr("Flask port of web_console (default 5000)"),
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )
@@ -1398,11 +1530,11 @@ fun LlmConfigCard(viewModel: MainViewModel) {
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("LLM config (device-side)", style = MaterialTheme.typography.titleSmall)
+            Text(tr("LLM config (device-side)"), style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = llmBaseUrl,
                 onValueChange = { viewModel.llmBaseUrl.value = it },
-                label = { Text("API Base URL") },
+                label = { Text(tr("API Base URL")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -1417,7 +1549,7 @@ fun LlmConfigCard(viewModel: MainViewModel) {
             OutlinedTextField(
                 value = llmApiKey,
                 onValueChange = { viewModel.llmApiKey.value = it },
-                label = { Text("API Key") },
+                label = { Text(tr("API Key")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
@@ -1425,24 +1557,24 @@ fun LlmConfigCard(viewModel: MainViewModel) {
             OutlinedTextField(
                 value = llmModel,
                 onValueChange = { viewModel.llmModel.value = it },
-                label = { Text("Model") },
+                label = { Text(tr("Model")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                supportingText = { Text("e.g. gpt-4o-mini, qwen-plus") }
+                supportingText = { Text(tr("e.g. gpt-4o-mini, qwen-plus")) }
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = { viewModel.testLlmAndSyncConfig() },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Test LLM & sync to device")
+                    Text(tr("Test LLM & sync to device"))
                 }
                 OutlinedButton(
                     onClick = { viewModel.saveConfig() },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Save only")
+                    Text(tr("Save only"))
                 }
             }
             if (llmTestResult.isNotEmpty()) {
@@ -1472,16 +1604,16 @@ fun UnlockPolicyConfigCard(viewModel: MainViewModel) {
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Unlock & lock policy", style = MaterialTheme.typography.titleSmall)
+            Text(tr("Unlock & lock policy"), style = MaterialTheme.typography.titleSmall)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Auto unlock before route", style = MaterialTheme.typography.bodyMedium)
+                    Text(tr("Auto unlock before route"), style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        "Check screen state and unlock before app launch/routing.",
+                        tr("Check screen state and unlock before app launch/routing."),
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )
@@ -1497,9 +1629,9 @@ fun UnlockPolicyConfigCard(viewModel: MainViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Auto lock after task", style = MaterialTheme.typography.bodyMedium)
+                    Text(tr("Auto lock after task"), style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        "Lock screen when task ends if the FSM unlocked it.",
+                        tr("Lock screen when task ends if the FSM unlocked it."),
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )
@@ -1512,13 +1644,13 @@ fun UnlockPolicyConfigCard(viewModel: MainViewModel) {
             OutlinedTextField(
                 value = unlockPin,
                 onValueChange = { viewModel.unlockPin.value = it },
-                label = { Text("Unlock PIN / password") },
+                label = { Text(tr("Unlock PIN / password")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 supportingText = {
-                    Text("Used only when swipe unlock is not enough.")
+                    Text(tr("Used only when swipe unlock is not enough."))
                 }
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1526,13 +1658,13 @@ fun UnlockPolicyConfigCard(viewModel: MainViewModel) {
                     onClick = { viewModel.syncDeviceConfigOnly() },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Sync to device")
+                    Text(tr("Sync to device"))
                 }
                 OutlinedButton(
                     onClick = { viewModel.saveConfig() },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Save only")
+                    Text(tr("Save only"))
                 }
             }
             if (llmTestResult.isNotEmpty()) {
@@ -1559,16 +1691,16 @@ fun MapSyncConfigCard(viewModel: MainViewModel) {
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Map sync & lane control", style = MaterialTheme.typography.titleSmall)
+            Text(tr("Map sync & lane control"), style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = mapRepoRawBaseUrl,
                 onValueChange = { viewModel.mapRepoRawBaseUrl.value = it },
-                label = { Text("Map repo raw base URL") },
+                label = { Text(tr("Map repo raw base URL")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 supportingText = {
-                    Text("e.g. https://raw.githubusercontent.com/wuwei-crg/LXB-MapRepo/main")
+                    Text(tr("e.g. https://raw.githubusercontent.com/wuwei-crg/LXB-MapRepo/main"))
                 }
             )
             Row(
@@ -1577,7 +1709,7 @@ fun MapSyncConfigCard(viewModel: MainViewModel) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Debug mode", style = MaterialTheme.typography.bodyMedium)
+                    Text(tr("Debug mode"), style = MaterialTheme.typography.bodyMedium)
                     Text(
                         text = if (mapDebugMode)
                             "ON: use candidate map when available; fallback to stable."
@@ -1595,23 +1727,23 @@ fun MapSyncConfigCard(viewModel: MainViewModel) {
             OutlinedTextField(
                 value = mapTargetPackage,
                 onValueChange = { viewModel.mapTargetPackage.value = it },
-                label = { Text("Package name") },
+                label = { Text(tr("Package name")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 supportingText = {
-                    Text("Used for pull-by-identifier and active status.")
+                    Text(tr("Used for pull-by-identifier and active status."))
                 }
             )
             OutlinedTextField(
                 value = mapTargetId,
                 onValueChange = { viewModel.mapTargetId.value = it },
-                label = { Text("Map ID") },
+                label = { Text(tr("Map ID")) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 supportingText = {
-                    Text("Required for stable/candidate pull by identifier.")
+                    Text(tr("Required for stable/candidate pull by identifier."))
                 }
             )
 
@@ -1620,13 +1752,13 @@ fun MapSyncConfigCard(viewModel: MainViewModel) {
                     onClick = { viewModel.syncStableMapsNow() },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Sync Stable All")
+                    Text(tr("Sync Stable All"))
                 }
                 OutlinedButton(
                     onClick = { viewModel.pullStableByIdentifierNow() },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Pull Stable by ID")
+                    Text(tr("Pull Stable by ID"))
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1634,7 +1766,7 @@ fun MapSyncConfigCard(viewModel: MainViewModel) {
                     onClick = { viewModel.pullCandidateByIdentifierNow() },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Pull Candidate by ID")
+                    Text(tr("Pull Candidate by ID"))
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1642,13 +1774,13 @@ fun MapSyncConfigCard(viewModel: MainViewModel) {
                     onClick = { viewModel.checkActiveMapStatus() },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Show active")
+                    Text(tr("Show active"))
                 }
                 OutlinedButton(
                     onClick = { viewModel.saveConfig() },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Save only")
+                    Text(tr("Save only"))
                 }
             }
             if (mapSyncResult.isNotEmpty()) {
