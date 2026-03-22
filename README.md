@@ -4,49 +4,39 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-Android-first mobile automation framework focused on **Route-Then-Act** execution.
+Android-first mobile automation framework focused on practical daily automation.
 
-## What It Does
+## Technical Foundation
 
-- Runs FSM fully on-device (no PC dependency for normal usage)
-- Uses Shizuku + `app_process` to keep backend runtime stable
-- Supports task queue and scheduled automation
-- Uses map-guided routing before vision actions to improve repeatability
+- **FSM orchestration**: each task is executed through a deterministic on-device state machine.
+- **Route-Then-Act**: use map routing first, then run visual actions to improve reliability.
+- **Shizuku + `app_process` runtime**: starts backend process in shell context for long-running/background scenarios.
 
-## Core Runtime
+## Feature Overview
 
-1. `INIT`
-2. `TASK_DECOMPOSE`
-3. `APP_RESOLVE`
-4. `ROUTE_PLAN`
-5. `ROUTING`
-6. `VISION_ACT`
+- **Chat task mode**: type a one-time request and run immediately.
+  - Example: "Order one coffee for me now."
+- **Scheduled task mode**: set a time and let the task run automatically.
+  - Example: "At 08:30 every weekday, place a coffee order."
 
 ## Quick Start
 
 1. Install Shizuku: https://github.com/RikkaApps/Shizuku
-2. Start Shizuku service on your phone
-3. Install latest `lxb-ignition-vX.Y.Z.apk` from Releases
-4. Open app -> grant Shizuku permission -> tap `Start Service`
-5. Configure LLM/VLM endpoint in Config
-6. Submit a task from Home chat
+2. Start Shizuku service on your phone.
+3. Install latest `lxb-ignition-vX.Y.Z.apk` from Releases.
+4. Open LXB-Ignition, grant Shizuku permission, then tap `Start Service`.
+5. Configure your LLM/VLM endpoint in `Config`.
+6. Run tasks from chat mode, or create schedules in `Tasks`.
 
-## Notes
+## Usage Recommendations
 
-- Recommended battery policy: `No restrictions` (especially on MIUI)
-- Map repository and map publishing tool are maintained in separate repositories
+- Set battery policy to **No restrictions** (especially on MIUI/ColorOS/Honor ROM variants).
+- For tasks without map coverage, provide a short **playbook** to improve action stability.
 
 ## Related Repositories
 
 - Map Builder (construction + publish tooling): https://github.com/wuwei-crg/LXB-MapBuilder
 - Map Repository (stable/candidate map artifacts): https://github.com/wuwei-crg/LXB-MapRepo
-
-## Build
-
-```bash
-cd android/LXB-Ignition
-./gradlew :app:installDebug
-```
 
 ## License
 
