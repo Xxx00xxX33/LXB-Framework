@@ -1,12 +1,17 @@
 ﻿package com.example.lxb_ignition
 
+import android.Manifest
 import android.app.DatePickerDialog
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.EditText
 import android.widget.NumberPicker
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -70,13 +75,37 @@ import java.util.Date
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(
+                this,
+                "Notification permission is recommended for task/runtime status.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ensureNotificationPermissionOnLaunch()
         enableEdgeToEdge()
         setContent {
             LXBIgnitionTheme {
                 LXBIgnitionApp()
             }
+        }
+    }
+
+    private fun ensureNotificationPermissionOnLaunch() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 }
@@ -138,8 +167,9 @@ fun LXBIgnitionApp(viewModel: MainViewModel = viewModel()) {
 
 @Composable
 fun ControlTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
-    val state by viewModel.state.collectAsState()
-    val statusMessage by viewModel.statusMessage.collectAsState()
+    val coreRuntime by viewModel.coreRuntimeStatus.collectAsState()
+    val shizukuState by viewModel.state.collectAsState()
+    val wireless by viewModel.wirelessBootstrapStatus.collectAsState()
     val requirement by viewModel.requirement.collectAsState()
     val chatMessages by viewModel.chatMessages.collectAsState()
     val listState = rememberLazyListState()
@@ -156,15 +186,23 @@ fun ControlTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Shizuku / lxb-core status
-        ShizukuStatusCard(state = state, message = statusMessage)
+        ProcessRuntimeCard(
+            status = coreRuntime
+        )
 
-        // Start / stop lxb-core via Shizuku
-        ServerControlRow(
-            state = state,
+        ProcessControlRow(
+            coreReady = coreRuntime.ready,
+            shizukuState = shizukuState,
             onRequestPermission = { viewModel.requestShizukuPermission() },
-            onStart = { viewModel.startServer() },
-            onStop = { viewModel.stopServer() }
+            onStartNative = { viewModel.startServerWithNative() },
+            onStartShizuku = { viewModel.startServerWithShizuku() },
+            onStop = { viewModel.stopServerProcess() },
+            onRefreshState = { viewModel.refreshCoreRuntimeStatusNow() }
+        )
+
+        WirelessBootstrapCard(
+            status = wireless,
+            onStartGuide = { viewModel.startWirelessBootstrapGuide() }
         )
 
         // Chat-style task session
@@ -276,6 +314,15 @@ private val ZhMap = mapOf(
     "Minute" to "分钟",
     "OK" to "确定",
     "Grant Shizuku" to "授予 Shizuku 权限",
+    "Core Connected" to "Core 已连接",
+    "Core Disconnected" to "Core 未连接",
+    "Start Native" to "原生启动",
+    "Start Shizuku" to "Shizuku 启动",
+    "Refresh Core State" to "刷新 Core 状态",
+    "Wireless bootstrap" to "无线 ADB 引导",
+    "Shizuku-free bootstrap path (M1). Start guide, then submit pairing code from notification." to "无 Shizuku 引导路径（M1）。点击开始引导后，在通知栏仅输入配对码。",
+    "Open Developer Options (Start Guide)" to "打开开发者选项（开始引导）",
+    "State" to "状态",
     "Start" to "启动",
     "Config center" to "配置中心",
     "Choose a category to configure. Each section opens a dedicated settings page." to "选择一个配置类别，每个类别会进入独立配置页面。",
@@ -1207,14 +1254,11 @@ fun ChatBubble(message: MainViewModel.ChatMessage) {
 }
 
 @Composable
-fun ShizukuStatusCard(state: ShizukuManager.State, message: String) {
-    val (bgColor, label) = when (state) {
-        ShizukuManager.State.UNAVAILABLE -> Color(0xFF9E9E9E) to "Shizuku unavailable"
-        ShizukuManager.State.PERMISSION_DENIED -> Color(0xFFFF9800) to "Permission required"
-        ShizukuManager.State.READY -> Color(0xFF2196F3) to "Ready"
-        ShizukuManager.State.STARTING -> Color(0xFF9C27B0) to "Starting..."
-        ShizukuManager.State.RUNNING -> Color(0xFF4CAF50) to "Running"
-        ShizukuManager.State.ERROR -> Color(0xFFF44336) to "Error"
+fun ProcessRuntimeCard(status: MainViewModel.CoreRuntimeStatus) {
+    val (bgColor, label) = if (status.ready) {
+        Color(0xFF4CAF50) to tr("Core Connected")
+    } else {
+        Color(0xFF9E9E9E) to tr("Core Disconnected")
     }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1222,30 +1266,31 @@ fun ShizukuStatusCard(state: ShizukuManager.State, message: String) {
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(label, color = Color.White, style = MaterialTheme.typography.titleSmall)
-            if (message.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(message, color = Color.White.copy(alpha = 0.9f), fontSize = 12.sp)
-            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(status.detail, color = Color.White.copy(alpha = 0.92f), fontSize = 12.sp)
         }
     }
 }
 
 @Composable
-fun ServerControlRow(
-    state: ShizukuManager.State,
+fun ProcessControlRow(
+    coreReady: Boolean,
+    shizukuState: ShizukuManager.State,
     onRequestPermission: () -> Unit,
-    onStart: () -> Unit,
-    onStop: () -> Unit
+    onStartNative: () -> Unit,
+    onStartShizuku: () -> Unit,
+    onStop: () -> Unit,
+    onRefreshState: () -> Unit
 ) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (state == ShizukuManager.State.PERMISSION_DENIED) {
+        if (shizukuState == ShizukuManager.State.PERMISSION_DENIED) {
             Button(
                 onClick = onRequestPermission,
                 modifier = Modifier
-                    .weight(1f)
+                    .fillMaxWidth()
                     .height(36.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                     horizontal = 8.dp,
@@ -1256,31 +1301,93 @@ fun ServerControlRow(
                 Text(tr("Grant Shizuku"))
             }
         }
-        OutlinedButton(
-            onClick = onStart,
-            enabled = state == ShizukuManager.State.READY || state == ShizukuManager.State.ERROR,
-            modifier = Modifier
-                .weight(1f)
-                .height(36.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                horizontal = 8.dp,
-                vertical = 4.dp
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(tr("Start"))
+            OutlinedButton(
+                onClick = onStartNative,
+                enabled = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(36.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = 8.dp,
+                    vertical = 4.dp
+                )
+            ) {
+                Text(tr("Start Native"), fontSize = 12.sp)
+            }
+            OutlinedButton(
+                onClick = onStartShizuku,
+                enabled = !coreReady && shizukuState != ShizukuManager.State.UNAVAILABLE,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(36.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = 8.dp,
+                    vertical = 4.dp
+                )
+            ) {
+                Text(tr("Start Shizuku"), fontSize = 12.sp)
+            }
+            OutlinedButton(
+                onClick = onStop,
+                enabled = coreReady,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(36.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = 8.dp,
+                    vertical = 4.dp
+                )
+            ) {
+                Text(tr("Stop"), fontSize = 12.sp)
+            }
         }
         OutlinedButton(
-            onClick = onStop,
-            enabled = state == ShizukuManager.State.RUNNING,
+            onClick = onRefreshState,
             modifier = Modifier
-                .weight(1f)
-                .height(36.dp),
+                .fillMaxWidth()
+                .height(34.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                 horizontal = 8.dp,
                 vertical = 4.dp
             )
         ) {
-            Text(tr("Stop"))
+            Text(tr("Refresh Core State"), fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+fun WirelessBootstrapCard(
+    status: MainViewModel.WirelessBootstrapStatus,
+    onStartGuide: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(tr("Wireless bootstrap"), style = MaterialTheme.typography.titleSmall)
+            Text(
+                tr("Shizuku-free bootstrap path (M1). Start guide, then submit pairing code from notification."),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                fontSize = 12.sp
+            )
+            Text(
+                "${tr("State")}: ${status.state} | ${status.message}",
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                fontSize = 12.sp
+            )
+            OutlinedButton(
+                onClick = onStartGuide,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !status.running
+            ) {
+                Text(tr("Open Developer Options (Start Guide)"), fontSize = 12.sp)
+            }
         }
     }
 }
