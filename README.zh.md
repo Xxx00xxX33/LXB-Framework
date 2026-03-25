@@ -45,7 +45,7 @@
 ## 致谢
 
 - 设计思路参考 Shizuku：https://github.com/RikkaApps/Shizuku
-- 第三方声明见：[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- 第三方声明见：[THIRD_PARTY_NOTICES.zh.md](THIRD_PARTY_NOTICES.zh.md)
 
 ## 许可证
 
