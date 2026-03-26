@@ -262,6 +262,56 @@ fun TaskSessionCard(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     }
 }
 
+@Composable
+fun TaskRuntimeStatusCard(status: MainViewModel.TaskRuntimeUiStatus, modifier: Modifier = Modifier) {
+    val bgColor = if (status.running) Color(0xFF4CAF50) else Color(0xFF9E9E9E)
+    val stateText = if (status.running) tr("RUNNING") else tr("IDLE")
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = bgColor)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    tr("Task Runtime"),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color.White
+                )
+                Text(stateText, color = Color.White, fontSize = 12.sp)
+            }
+            val taskText = if (status.taskId.isNotEmpty()) {
+                "${tr("Current task")}: ${status.taskId.take(8)}..."
+            } else {
+                "${tr("Current task")}: -"
+            }
+            Text(
+                text = taskText,
+                fontSize = 12.sp,
+                color = Color.White.copy(alpha = 0.92f)
+            )
+            Text(
+                text = "${tr("Phase")}: ${status.phase}",
+                fontSize = 12.sp,
+                color = Color.White.copy(alpha = 0.92f)
+            )
+            val detail = if (status.running) status.detail else tr("No task is running.")
+            Text(
+                text = detail,
+                fontSize = 12.sp,
+                color = Color.White.copy(alpha = 0.88f)
+            )
+        }
+    }
+}
+
 private class UiI18n(private val lang: String) {
     fun tr(text: String): String {
         if (lang != "zh") return text
@@ -287,6 +337,12 @@ private val ZhMap = mapOf(
     "Run" to "运行",
     "Stop" to "停止",
     "Task Manager" to "任务管理",
+    "Task Runtime" to "任务运行状态",
+    "RUNNING" to "运行中",
+    "IDLE" to "空闲",
+    "Current task" to "当前任务",
+    "Phase" to "阶段",
+    "No task is running." to "当前没有任务在运行。",
     "Refresh All" to "全部刷新",
     "No runs yet. Submit a task from Task Session or wait for schedules." to "暂无执行记录。可在任务会话中提交任务，或等待定时任务执行。",
     "Schedules" to "定时任务",
@@ -338,6 +394,7 @@ private val ZhMap = mapOf(
     "Current app version" to "当前应用版本",
     "Check latest release" to "检查最新版本",
     "Open releases" to "打开 Releases",
+    "Use OpenAI Chat Completions compatible endpoint. URL should end with /v1 or /v1/chat/completions." to "使用 OpenAI Chat Completions 兼容接口。URL 建议以 /v1 或 /v1/chat/completions 结尾。",
     "lxb-core server" to "lxb-core 服务",
     "TCP port" to "TCP 端口",
     "TCP port listened by lxb-core on device (default 12345)" to "设备端 lxb-core 监听的 TCP 端口（默认 12345）",
@@ -379,6 +436,7 @@ private val ZhMap = mapOf(
 fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val tasks by viewModel.taskList.collectAsState()
     val schedules by viewModel.scheduleList.collectAsState()
+    val taskRuntime by viewModel.taskRuntimeUiStatus.collectAsState()
     val scheduleName by viewModel.scheduleName.collectAsState()
     val scheduleTask by viewModel.scheduleTask.collectAsState()
     val scheduleStartAtMs by viewModel.scheduleStartAtMs.collectAsState()
@@ -425,6 +483,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     }
                 }
 
+                TaskRuntimeStatusCard(status = taskRuntime)
                 TaskSessionCard(viewModel = viewModel)
 
                 Card(
@@ -1665,7 +1724,7 @@ fun LlmConfigCard(viewModel: MainViewModel) {
                 singleLine = true,
                 supportingText = {
                     Text(
-                        "e.g. https://api.openai.com/v1/chat/completions",
+                        tr("Use OpenAI Chat Completions compatible endpoint. URL should end with /v1 or /v1/chat/completions."),
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                         fontSize = 12.sp
                     )

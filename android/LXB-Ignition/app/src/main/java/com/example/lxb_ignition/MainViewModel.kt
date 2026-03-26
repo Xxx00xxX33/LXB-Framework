@@ -108,7 +108,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Config: LLM (device-side direct call)
     val llmBaseUrl = MutableStateFlow(prefs.getString(KEY_LLM_BASE_URL, "") ?: "")
     val llmApiKey = MutableStateFlow(prefs.getString(KEY_LLM_API_KEY, "") ?: "")
-    val llmModel = MutableStateFlow(prefs.getString(KEY_LLM_MODEL, "gpt-4o-mini") ?: "gpt-4o-mini")
+    val llmModel = MutableStateFlow(prefs.getString(KEY_LLM_MODEL, "") ?: "")
     val autoUnlockBeforeRoute = MutableStateFlow(prefs.getBoolean(KEY_AUTO_UNLOCK_BEFORE_ROUTE, true))
     val autoLockAfterTask = MutableStateFlow(prefs.getBoolean(KEY_AUTO_LOCK_AFTER_TASK, true))
     val unlockPin = MutableStateFlow(prefs.getString(KEY_UNLOCK_PIN, "") ?: "")
@@ -153,6 +153,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var activeTraceJob: Job? = null
     private var activeRuntimeTaskId: String = ""
     private var coreProbeJob: Job? = null
+
+    data class TaskRuntimeUiStatus(
+        val running: Boolean = false,
+        val taskId: String = "",
+        val phase: String = "IDLE",
+        val detail: String = "Idle"
+    )
+
+    private val _taskRuntimeUiStatus = MutableStateFlow(TaskRuntimeUiStatus())
+    val taskRuntimeUiStatus: StateFlow<TaskRuntimeUiStatus> = _taskRuntimeUiStatus.asStateFlow()
 
     data class CoreRuntimeStatus(
         val ready: Boolean = false,
@@ -584,9 +594,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             withContext(Dispatchers.Main) {
                 _taskList.value = result.second
+                syncTaskRuntimeUiFromTaskList(result.second)
                 appendLog("[FSM] ${result.first}")
                 appendSystemMessage(result.first)
             }
+        }
+    }
+
+    private fun syncTaskRuntimeUiFromTaskList(items: List<TaskSummary>) {
+        val running = items.firstOrNull { s ->
+            s.state.equals("RUNNING", ignoreCase = true) &&
+                !s.finalState.equals("FAIL", ignoreCase = true) &&
+                !s.finalState.equals("FINISH", ignoreCase = true) &&
+                !s.finalState.equals("DONE", ignoreCase = true)
+        }
+        if (running != null) {
+            activeRuntimeTaskId = running.taskId
+            val detail = when {
+                running.taskSummary.isNotBlank() -> running.taskSummary
+                running.userTask.isNotBlank() -> running.userTask
+                else -> "Task is running."
+            }
+            _taskRuntimeUiStatus.value = TaskRuntimeUiStatus(
+                running = true,
+                taskId = running.taskId,
+                phase = running.state.ifEmpty { "RUNNING" },
+                detail = detail
+            )
+            return
+        }
+        if (_taskRuntimeUiStatus.value.running) {
+            activeRuntimeTaskId = ""
+            _taskRuntimeUiStatus.value = TaskRuntimeUiStatus()
         }
     }
 
@@ -1196,6 +1235,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startTaskRuntimeIndicator(taskId: String, phase: String, detail: String) {
         activeRuntimeTaskId = taskId
+        _taskRuntimeUiStatus.value = TaskRuntimeUiStatus(
+            running = true,
+            taskId = taskId,
+            phase = phase.ifEmpty { "RUNNING" },
+            detail = detail.ifEmpty { "Task is running." }
+        )
         sendTaskRuntimeServiceAction(
             action = TaskRuntimeService.ACTION_START,
             taskId = taskId,
@@ -1206,6 +1251,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateTaskRuntimeIndicator(phase: String, detail: String = "", taskId: String = "") {
         val tid = if (taskId.isNotEmpty()) taskId else activeRuntimeTaskId
+        val current = _taskRuntimeUiStatus.value
+        val normalizedPhase = phase.ifEmpty { current.phase.ifEmpty { "RUNNING" } }
+        val running = when (normalizedPhase.uppercase()) {
+            "IDLE", "STOP", "DONE", "FAILED", "CANCELLED" -> false
+            else -> true
+        }
+        _taskRuntimeUiStatus.value = TaskRuntimeUiStatus(
+            running = running,
+            taskId = if (tid.isNotEmpty()) tid else current.taskId,
+            phase = normalizedPhase,
+            detail = if (detail.isNotEmpty()) detail else current.detail
+        )
         sendTaskRuntimeServiceAction(
             action = TaskRuntimeService.ACTION_UPDATE,
             taskId = tid,
@@ -1222,6 +1279,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             detail = ""
         )
         activeRuntimeTaskId = ""
+        _taskRuntimeUiStatus.value = TaskRuntimeUiStatus()
     }
 
     private fun sendTaskRuntimeServiceAction(action: String, taskId: String, phase: String, detail: String) {
