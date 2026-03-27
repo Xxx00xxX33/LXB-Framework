@@ -1,51 +1,88 @@
-﻿# LXB-Framework
+# LXB-Framework
 
 <img src="resources/logo.jpg" alt="LXB Logo" width="180" />
 
 [English](README.md) | [中文](README.zh.md)
 
-面向 Android 的端侧自动化框架，聚焦高频日常任务自动执行。
+实验性安卓端自动化框架，专注于高频、线性的日常任务自动执行。
+框架不依赖大模型去"自由探索"页面，而是采用 **Route-Then-Act** 流水线：预构建的导航地图负责确定性的页面跳转，视觉大模型只在真正"干活"时才介入。
 
-## 技术实现
+## 工作原理
 
-- **FSM 状态机编排**：任务在端侧按可控状态机执行，流程可追踪。
-- **Route-Then-Act 架构**：先走 map 路由，再做视觉动作，提高稳定性。
-- **Shizuku + `app_process` 后台运行**：通过 shell 进程维持后端运行能力，支持长时任务与定时任务。
+- **Route-Then-Act 流水线**：任务被切分为路由阶段（基于地图，无视觉推理）和动作阶段（VLM 处理动态 UI），各司其职。
+- **FSM 状态机编排**：完整的状态机（INIT → TASK_DECOMPOSE → APP_RESOLVE → ROUTE_PLAN → ROUTING → VISION_ACT → FINISH/FAIL）让执行流程可控、可追踪。
+- **`app_process` 守护进程**：后端以 shell 级进程运行，独立于 Android 应用生命周期，无需依赖系统脆弱的 Service 保活机制，支持可靠的后台执行和定时任务。
+
+![整体架构](resources/architecture_overall.png)
+
+![Framework 内部架构](resources/architecture_LXB-Framework.png)
 
 ## 功能概述
 
-- **对话任务模式**：用户输入需求，立即执行一次。
-  - 示例："现在帮我下单一杯咖啡。"
-- **定时任务模式**：设定时间自动执行任务。
-  - 示例："工作日早上 08:30 自动下单一杯咖啡。"
+- **对话任务模式**：输入自然语言需求，立即执行一次。
+  - 示例：`帮我在咖啡 App 下单一杯超大杯生椰拿铁。`
+- **定时任务模式**：设定触发时间（一次性、每天、每周），守护进程自动唤醒执行，即使息屏或 App 被杀也不影响。
+  - 示例：`工作日早上 08:30，自动帮我下单今日咖啡。`
+- **Playbook 兜底**：对于暂无导航地图的 App，编写一份操作说明书，流水线会按步执行。
 
-## 演示视频
+## 环境要求
 
-- Bilibili：https://www.bilibili.com/video/BV1sCQDB2Es2
+- Android **11（API 30）** 及以上真机（模拟器亦可，但部分 App 可能有模拟器检测）
+- 开启手机**开发者选项**和**无线调试**（无需 Root，无需额外安装其他 App）
+- 兼容 **OpenAI API 格式**的 LLM/VLM 接口（`/v1/chat/completions`），支持任意模型提供商
 
 ## 快速开始
 
-1. 安装 Shizuku：https://github.com/RikkaApps/Shizuku
-2. 在手机上启动 Shizuku 服务。
-3. 从 Releases 安装最新 `lxb-ignition-vX.Y.Z.apk`。
-4. 打开 LXB-Ignition，授权 Shizuku 后点击 `Start Service`。
-5. 在 `Config` 中配置 LLM/VLM 接口。
-6. 在首页执行对话任务，或在 `Tasks` 中创建定时任务。
+1. **开启无线调试**：进入手机「设置 → 开发者选项」，打开「无线调试」。
+2. **安装 APK**：从 [Releases](https://github.com/wuwei-crg/LXB-Framework/releases) 下载最新版 `lxb-ignition-vX.Y.Z.apk` 并安装。
+3. **配对设备**：打开 LXB-Ignition，按照 App 内引导完成配对。手机屏幕上会显示一个六位配对码，在 App 弹出的通知栏中输入即可完成首次配对，后续启动会自动重连。
+4. **启动守护进程**：配对成功后，App 自动将后端 DEX 推送到设备并通过 `app_process` 启动守护进程。界面状态指示变为**运行中**即表示就绪。
+5. **配置模型接口**：进入 `Config` 页签，填写：
+   - **API Base URL** — 模型接口地址（兼容 OpenAI 格式）
+   - **API Key** — 对应的密钥
+   - **Model** — 模型名称，如 `gpt-4o-mini`、`qwen-plus`
+6. **（可选）同步地图**：在 `Config` 中配置 MapRepo 地址，启用后框架会自动拉取稳定地图。未配置时降级为纯视觉模式。
+
+## 运行第一个任务
+
+配置完成后，在首页对话框中输入需求，例如：
+
+```
+打开 Bilibili，发一条动态，内容为 test，标题为 test
+打开微信，给文件传输助手发一条消息：hello
+```
+
+执行过程中界面会实时显示当前 FSM 状态（ROUTE_PLAN → ROUTING → VISION_ACT）。
+
+## 定时任务
+
+在 `Tasks` 页签中创建定时任务：
+- 设置触发时间（一次性、每天或每周）
+- 指定目标 App 包名
+- 编写任务需求
+- 可选：为无地图的 App 附上 **Playbook**
+
+得益于 `app_process` 守护进程，定时任务在息屏或 App 被杀后依然会准时执行。
+
+## 为新 App 构建导航地图
+
+导航地图通过 [LXB-MapBuilder](https://github.com/wuwei-crg/LXB-MapBuilder) 构建，通过 [LXB-MapRepo](https://github.com/wuwei-crg/LXB-MapRepo) 分发。完整建图流程见 MapBuilder README。已有的稳定地图可直接在 `Config` 页签中通过 MapRepo 地址一键同步。
 
 ## 使用建议
 
-- 电池策略建议设为**无限制**（尤其是 MIUI/ColorOS/Honor 等系统）。
-- 对于暂无 map 的任务，建议提前编写简短 **playbook** 提升执行稳定性。
+- 将 LXB-Ignition 的电池策略设为**无限制**（尤其是 MIUI / ColorOS / HyperOS / Honor 等系统）。
+- 对于暂无地图的 App，提前编写简短的 **Playbook** 可以显著提升动作执行的稳定性。
 
 ## 相关仓库
 
-- MapBuilder（建图与发布工具）：https://github.com/wuwei-crg/LXB-MapBuilder
-- MapRepo（stable/candidate 地图仓库）：https://github.com/wuwei-crg/LXB-MapRepo
+- [LXB-MapBuilder](https://github.com/wuwei-crg/LXB-MapBuilder) — 建图与地图发布工具
+- [LXB-MapRepo](https://github.com/wuwei-crg/LXB-MapRepo) — stable/candidate 导航地图仓库
 
 ## 致谢
 
-- 设计思路参考 Shizuku：https://github.com/RikkaApps/Shizuku
-- 第三方声明见：[THIRD_PARTY_NOTICES.zh.md](THIRD_PARTY_NOTICES.zh.md)
+`app_process` 守护进程的设计思路参考了 [Shizuku](https://github.com/RikkaApps/Shizuku)。LXB-Framework 自行实现了 Wireless ADB 配对与连接，运行时不依赖 Shizuku。
+
+第三方声明见：[THIRD_PARTY_NOTICES.zh.md](THIRD_PARTY_NOTICES.zh.md)
 
 ## 许可证
 
