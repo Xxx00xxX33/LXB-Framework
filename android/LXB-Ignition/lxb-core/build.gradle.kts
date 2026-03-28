@@ -80,3 +80,7 @@ tasks.register("buildDex") {
     }
 }
 
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+}

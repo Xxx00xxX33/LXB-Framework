@@ -3,6 +3,7 @@ package com.lxb.server.cortex;
 import com.lxb.server.execution.ExecutionEngine;
 import com.lxb.server.perception.PerceptionEngine;
 import com.lxb.server.cortex.json.Json;
+import com.lxb.server.cortex.route.RouteExecutionService;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -27,10 +28,6 @@ import java.util.zip.GZIPInputStream;
 public class CortexFacade {
 
     private static final String TAG = "[LXB][Cortex]";
-    private static final int LAUNCH_RETRY_MAX = 3;
-    private static final long LAUNCH_WAIT_TIMEOUT_MS = 5000L;
-    private static final long LAUNCH_WAIT_SAMPLE_MS = 500L;
-
     private final ExecutionEngine executionEngine;
     private final PerceptionEngine perceptionEngine;
 
@@ -40,6 +37,7 @@ public class CortexFacade {
     private final LlmClient llmClient;
     private final CortexFsmEngine fsmEngine;
     private final CortexTaskManager taskManager;
+    private final RouteExecutionService routeExecutionService;
 
     public CortexFacade(PerceptionEngine perceptionEngine, ExecutionEngine executionEngine) {
         this.perceptionEngine = perceptionEngine;
@@ -50,6 +48,12 @@ public class CortexFacade {
         this.llmClient = new LlmClient();
         this.fsmEngine = new CortexFsmEngine(perceptionEngine, executionEngine, mapManager, trace);
         this.taskManager = new CortexTaskManager(fsmEngine);
+        this.routeExecutionService = new RouteExecutionService(
+                executionEngine,
+                perceptionEngine,
+                locatorResolver,
+                trace
+        );
     }
 
     public byte[] handleMapSetGz(byte[] payload) {
@@ -305,7 +309,7 @@ public class CortexFacade {
                 return ok(Json.stringify(out));
             }
 
-            Map<String, Object> routeResult = executeRoute(pkg, effectiveFrom, targetPage, path);
+            Map<String, Object> routeResult = routeExecutionService.executeRoute(pkg, effectiveFrom, targetPage, path);
 
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("ok", routeResult.get("ok"));
@@ -744,22 +748,22 @@ public class CortexFacade {
     }
 
     /**
-     * Route-only 闁圭瑳鍡╂斀闁挎稒鑹鹃悢鈧ù?map transitions闁挎稑濂旂划?home闁挎稑鐗婇崹銊╁及閹呯 start_page闁挎稑顦抽惌楣冩偨閸楃偛鐓?target_page闁?     *
+     * Route-only 闂佸湱鐟抽崱鈺傛杸闂佹寧绋掗懝楣冩偄閳ь剙霉?map transitions闂佹寧绋戞總鏃傚垝?home闂佹寧绋戦悧濠囧垂閵娾晛鍙婇柟顖嗗懐顢?start_page闂佹寧绋戦ˇ鎶芥儗妤ｅ啯鍋ㄩ柛妤冨仜閻?target_page闂?     *
      * payload: JSON UTF-8:
      * {
      *   "package": "tv.danmaku.bili",
-     *   "target_page": "search_page__n_xxx",   // 闁烩晩鍠楅悥锝嗐亜绾板绀勯煫鍥ф噹閿濈偤鏁?     *   "start_page": "bilibili_home",         // 闁告瑯鍨堕埀顒€顧€缁辨繈鎮惧▎鎴旀晞闁哄啫澧庨顒佺瑹瑜庣€?map 闁规亽鍔嶉弻?home
-     *   "max_steps": 16                        // 闁告瑯鍨堕埀顒€顧€缁? 闁瑰瓨鐗滃閬嶆儑娴ｅ鈧啰绮堟潪鏉库枏闁活潿鍔戠划顖滄媼閵堝嫮鐟愰梻?     * }
+     *   "target_page": "search_page__n_xxx",   // 闂佺儵鏅╅崰妤呮偉閿濆棎浜滅痪鏉款槺缁€鍕叓閸パ勫櫣闁挎繄鍋ら弫?     *   "start_page": "bilibili_home",         // 闂佸憡鐟崹鍫曞焵椤掆偓椤р偓缂佽鲸绻堥幃鎯р枎閹存梹鏅為梺鍝勫暙婢у酣顢旈浣虹懝鐟滃海鈧?map 闂佽浜介崝宥夊蓟?home
+     *   "max_steps": 16                        // 闂佸憡鐟崹鍫曞焵椤掆偓椤р偓缂? 闂佺懓鐡ㄩ悧婊冾啅闁秵鍎戝ù锝咁潟閳ь剙鍟扮划鍫熸姜閺夊簱鏋忛梺娲绘娇閸旀垹鍒掗婊勫闁靛牆瀚悷鎰版⒒?     * }
      *
-     * 闁稿繒鍘ч鎰板籍瑜忔晶妤冩嫬閸愵厾妲搁柨娑欒壘椤┭囧几濠婂嫭寮撻柟缁樺姃缁?target_page 濞达絽妫欏﹢?from_page/to_page闁挎稑鑻崹顖滄導閻楀牊鈻旂€?from->to 閻犱警鍨抽弫閬嶅Υ?     *
-     * 閺夆晜鏌ㄥú?JSON:
+     * 闂佺绻掗崢褔顢欓幇鏉跨睄鐟滃繑鏅跺Δ鍐╁闁告劦鍘惧Σ鎼佹煥濞戞瑨澹樻い鈹洤鍑犳繝濠傚瀵捇鏌熺紒妯哄缂?target_page 婵炶揪绲藉Λ娆忥耿?from_page/to_page闂佹寧绋戦懟顖炲垂椤栨粍灏庨柣妤€鐗婇埢鏃傗偓?from->to 闁荤姳璀﹂崹鎶藉极闁秴违?     *
+     * 闁哄鏅滈弻銊ッ?JSON:
      * {
      *   "ok": true/false,
      *   "package": "...",
      *   "from_page": "...",
      *   "to_page": "...",
      *   "steps": [ { index, from, to, description, picked_stage, picked_bounds, result, reason }, ... ],
-     *   "reason": "step_failed|no_path" // 濞寸姴鎳庨妵鎴犳嫻閵夛附顦ч悗娑櫭﹢?     * }
+     *   "reason": "step_failed|no_path" // 婵炲濮撮幊搴ㄥΦ閹寸姵瀚婚柕澶涢檮椤ρ囨倵濞戞顏勶耿?     * }
      */
         public byte[] handleRouteRun(byte[] payload) {
         try {
@@ -800,7 +804,7 @@ public class CortexFacade {
             if (useLegacyFromTo) {
                 effectiveFrom = fromPageLegacy;
                 effectiveTo = toPageLegacy;
-                trace.event("route_begin", buildRouteEvent(pkg, effectiveFrom, effectiveTo, "begin"));
+                trace.event("route_begin", RouteExecutionService.buildRouteEvent(pkg, effectiveFrom, effectiveTo, "begin"));
                 path = routeMap.findPath(effectiveFrom, effectiveTo, maxSteps);
             } else {
                 // New semantics: only target_page is required; start_page is optional override of inferred home.
@@ -810,12 +814,12 @@ public class CortexFacade {
                 }
                 effectiveFrom = start;
                 effectiveTo = targetPage;
-                trace.event("route_begin", buildRouteEvent(pkg, effectiveFrom, effectiveTo, "begin"));
+                trace.event("route_begin", RouteExecutionService.buildRouteEvent(pkg, effectiveFrom, effectiveTo, "begin"));
                 path = routeMap.findPathFromHome(effectiveTo, maxSteps);
             }
 
             if (path == null) {
-                Map<String, Object> ev = buildRouteEvent(pkg, effectiveFrom, effectiveTo, "no_path");
+                Map<String, Object> ev = RouteExecutionService.buildRouteEvent(pkg, effectiveFrom, effectiveTo, "no_path");
                 trace.event("route_no_path", ev);
                 Map<String, Object> outFail = new LinkedHashMap<>();
                 outFail.put("ok", false);
@@ -827,7 +831,7 @@ public class CortexFacade {
                 return ok(Json.stringify(outFail));
             }
 
-            Map<String, Object> out = executeRoute(pkg, effectiveFrom, effectiveTo, path);
+            Map<String, Object> out = routeExecutionService.executeRoute(pkg, effectiveFrom, effectiveTo, path);
             return ok(Json.stringify(out));
         } catch (Exception e) {
             Map<String, Object> ev = new LinkedHashMap<>();
@@ -835,175 +839,6 @@ public class CortexFacade {
             trace.event("route_err", ev);
             return err(String.valueOf(e));
         }
-    }
-
-    /**
-     * Run full route execution for the given path and package.
-     * Shared by handleRouteRun and higher-level FSM/LLM entry points to keep behavior aligned.
-     */
-    private Map<String, Object> executeRoute(
-            String pkg,
-            String effectiveFrom,
-            String effectiveTo,
-            java.util.List<RouteMap.Transition> path
-    ) {
-        // Before executing route steps, launch app with CLEAR_TASK, aligned with Python RouteThenActCortex.
-        boolean launchOk = launchAppForRoute(pkg);
-        Map<String, Object> launchEv = new LinkedHashMap<>();
-        launchEv.put("package", pkg);
-        launchEv.put("clear_task", true);
-        launchEv.put("result", launchOk ? "ok" : "fail");
-        trace.event("route_launch_app", launchEv);
-        if (!launchOk) {
-            Map<String, Object> outFail = new LinkedHashMap<>();
-            outFail.put("ok", false);
-            outFail.put("package", pkg);
-            outFail.put("from_page", effectiveFrom);
-            outFail.put("to_page", effectiveTo);
-            outFail.put("steps", new java.util.ArrayList<>());
-            outFail.put("reason", "launch_failed");
-            return outFail;
-        }
-        // Python side sleeps ~1.5s after launch_app; do the same to avoid resolving on a half-loaded UI.
-        try {
-            Thread.sleep(1500);
-        } catch (InterruptedException ignored) {
-        }
-
-        java.util.List<Map<String, Object>> stepSummaries = new java.util.ArrayList<>();
-        int index = 0;
-        boolean allOk = true;
-
-        for (RouteMap.Transition t : path) {
-            Map<String, Object> stepEv = new LinkedHashMap<>();
-            stepEv.put("package", pkg);
-            stepEv.put("from_page", t.fromPage);
-            stepEv.put("to_page", t.toPage);
-            stepEv.put("index", index);
-            stepEv.put("description", t.description);
-            trace.event("route_step_start", stepEv);
-
-            Map<String, Object> step = new LinkedHashMap<>();
-            step.put("index", index);
-            step.put("from", t.fromPage);
-            step.put("to", t.toPage);
-            step.put("description", t.description);
-
-            String result = "ok";
-            String reason = "";
-            String pickedStage = "";
-            java.util.List<Object> pickedBounds = null;
-
-            try {
-                Locator locator = t.action != null ? t.action.locator : null;
-                if (locator == null) {
-                    result = "resolve_fail";
-                    reason = "missing_locator";
-                    allOk = false;
-                } else {
-                    // For robustness, mirror Python RouteThenActCortex: retry when there are temporarily no candidates,
-                    // but still fail-fast on ambiguous candidates to keep strict semantics.
-                    ResolvedNode node = resolveWithRetry(locator);
-                    pickedStage = node.pickedStage;
-                    pickedBounds = node.bounds.toList();
-
-                    int cx = (node.bounds.left + node.bounds.right) / 2;
-                    int cy = (node.bounds.top + node.bounds.bottom) / 2;
-
-                    ByteBuffer tapPayload = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN);
-                    tapPayload.putShort((short) cx);
-                    tapPayload.putShort((short) cy);
-                    byte[] resp = executionEngine.handleTap(tapPayload.array());
-
-                    step.put("tap_resp_len", resp != null ? resp.length : 0);
-                }
-            } catch (Exception e) {
-                allOk = false;
-                String msg = String.valueOf(e);
-                result = result.startsWith("resolve") ? result : "tap_fail";
-                reason = msg;
-            }
-
-            step.put("picked_stage", pickedStage);
-            if (pickedBounds != null) {
-                step.put("picked_bounds", pickedBounds);
-            }
-            step.put("result", result);
-            step.put("reason", reason);
-
-            trace.event("route_step_end", step);
-
-            stepSummaries.add(step);
-            if (!"ok".equals(result)) {
-                break;
-            }
-            index++;
-
-            // Give UI some time to finish transitions to the next page before tapping again.
-            try {
-                Thread.sleep(400);
-            } catch (InterruptedException ignored) {
-            }
-        }
-
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("ok", allOk);
-        out.put("package", pkg);
-        out.put("from_page", effectiveFrom);
-        out.put("to_page", effectiveTo);
-        out.put("steps", stepSummaries);
-        if (!allOk) {
-            out.put("reason", "step_failed");
-        }
-
-        trace.event("route_end", buildRouteEvent(pkg, effectiveFrom, effectiveTo, allOk ? "ok" : "failed"));
-
-        return out;
-    }
-
-    /**
-     * Route-only helper: resolve locator with small retry window for "no candidates" cases
-     * to tolerate UI loading races, while keeping strict behavior for ambiguous matches.
-     */
-    private ResolvedNode resolveWithRetry(Locator locator) throws Exception {
-        final int maxAttempts = 3;
-        final long intervalMs = 300L;
-        Exception last = null;
-
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            try {
-                ResolvedNode node = locatorResolver.resolve(locator);
-                Map<String, Object> ev = new LinkedHashMap<>();
-                ev.put("attempt", attempt);
-                ev.put("result", "ok");
-                trace.event("route_resolve_locator", ev);
-                return node;
-            } catch (IllegalStateException e) {
-                last = e;
-                String msg = String.valueOf(e.getMessage());
-                boolean isNoCandidates = msg != null && msg.contains("no candidates");
-
-                Map<String, Object> ev = new LinkedHashMap<>();
-                ev.put("attempt", attempt);
-                ev.put("err", msg);
-                trace.event("route_resolve_retry", ev);
-
-                // For ambiguous candidates, do not retry to avoid random taps.
-                if (!isNoCandidates || attempt == maxAttempts) {
-                    throw e;
-                }
-
-                try {
-                    Thread.sleep(intervalMs);
-                } catch (InterruptedException ignored) {
-                }
-            }
-        }
-
-        if (last != null) {
-            throw last;
-        }
-        throw new IllegalStateException("locator resolve failed");
     }
 
     private static String gunzipToString(byte[] gz) throws Exception {
@@ -1062,14 +897,6 @@ public class CortexFacade {
         return "true".equalsIgnoreCase(s) || "1".equals(s);
     }
 
-    private static Map<String, Object> buildRouteEvent(String pkg, String from, String to, String status) {
-        Map<String, Object> ev = new LinkedHashMap<>();
-        ev.put("package", pkg);
-        ev.put("from_page", from);
-        ev.put("to_page", to);
-        ev.put("status", status);
-        return ev;
-    }
 
     private String getConfiguredMapSourceOrDefault() {
         try {
@@ -1088,125 +915,4 @@ public class CortexFacade {
         return mapManager.getMapFileForSource(pkg, getConfiguredMapSourceOrDefault());
     }
 
-    /**
-     * 启动应用用于路由，相当于 Python 端 RouteThenActCortex._execute_route 中的 client.launch_app(..., clear_task=True)。
-     */
-    private boolean launchAppForRoute(String packageName) {
-        try {
-            for (int attempt = 1; attempt <= LAUNCH_RETRY_MAX; attempt++) {
-                // Best-effort stop before launch to avoid start failure on some devices.
-                stopAppBestEffortForRoute(packageName);
-                boolean launchOk = launchAppClearTaskForRoute(packageName);
-                boolean packageReady = launchOk && waitForForegroundPackageForRoute(
-                        packageName, LAUNCH_WAIT_TIMEOUT_MS, LAUNCH_WAIT_SAMPLE_MS
-                );
-
-                Map<String, Object> ev = new LinkedHashMap<>();
-                ev.put("package", packageName);
-                ev.put("attempt", attempt);
-                ev.put("launch_ok", launchOk);
-                ev.put("package_ready", packageReady);
-                trace.event("route_launch_attempt", ev);
-
-                if (launchOk && packageReady) {
-                    return true;
-                }
-            }
-            Map<String, Object> ev = new LinkedHashMap<>();
-            ev.put("package", packageName);
-            ev.put("attempts", LAUNCH_RETRY_MAX);
-            ev.put("reason", "package_not_ready");
-            trace.event("route_launch_failed", ev);
-            return false;
-        } catch (Exception e) {
-            Map<String, Object> ev = new LinkedHashMap<>();
-            ev.put("err", String.valueOf(e));
-            ev.put("package", packageName);
-            trace.event("route_launch_err", ev);
-            return false;
-        }
-    }
-
-    private boolean launchAppClearTaskForRoute(String packageName) {
-        byte[] pkgBytes = packageName.getBytes(StandardCharsets.UTF_8);
-        ByteBuffer buf = ByteBuffer.allocate(1 + 2 + pkgBytes.length).order(ByteOrder.BIG_ENDIAN);
-        int flags = 0x01; // CLEAR_TASK
-        buf.put((byte) flags);
-        buf.putShort((short) pkgBytes.length);
-        buf.put(pkgBytes);
-        byte[] resp = executionEngine.handleLaunchApp(buf.array());
-        boolean ok = resp != null && resp.length > 0 && resp[0] == 0x01;
-        if (!ok) {
-            Map<String, Object> ev = new LinkedHashMap<>();
-            ev.put("package", packageName);
-            ev.put("status", resp != null && resp.length > 0 ? (int) resp[0] : 0);
-            trace.event("route_launch_status", ev);
-        }
-        return ok;
-    }
-
-    private boolean waitForForegroundPackageForRoute(String expectedPackage, long timeoutMs, long sampleMs) {
-        long deadline = System.currentTimeMillis() + Math.max(0L, timeoutMs);
-        while (true) {
-            String currentPkg = getCurrentPackageForRoute();
-            if (expectedPackage.equals(currentPkg)) {
-                return true;
-            }
-            if (System.currentTimeMillis() >= deadline) {
-                return false;
-            }
-            try {
-                Thread.sleep(Math.max(1L, sampleMs));
-            } catch (InterruptedException ignored) {
-                return false;
-            }
-        }
-    }
-
-    private String getCurrentPackageForRoute() {
-        try {
-            byte[] resp = perceptionEngine.handleGetActivity();
-            if (resp == null || resp.length < 5) {
-                return "";
-            }
-            ByteBuffer buf = ByteBuffer.wrap(resp).order(ByteOrder.BIG_ENDIAN);
-            byte status = buf.get();
-            if (status == 0) {
-                return "";
-            }
-            int pkgLen = buf.getShort() & 0xFFFF;
-            if (pkgLen <= 0 || buf.remaining() < pkgLen) {
-                return "";
-            }
-            byte[] pkgBytes = new byte[pkgLen];
-            buf.get(pkgBytes);
-            return new String(pkgBytes, StandardCharsets.UTF_8).trim();
-        } catch (Exception ignored) {
-            return "";
-        }
-    }
-
-    private void stopAppBestEffortForRoute(String packageName) {
-        try {
-            byte[] pkgBytes = packageName.getBytes(StandardCharsets.UTF_8);
-            ByteBuffer buf = ByteBuffer.allocate(2 + pkgBytes.length).order(ByteOrder.BIG_ENDIAN);
-            buf.putShort((short) pkgBytes.length);
-            buf.put(pkgBytes);
-            byte[] resp = executionEngine.handleStopApp(buf.array());
-            boolean ok = resp != null && resp.length > 0 && resp[0] == 0x01;
-            Map<String, Object> ev = new LinkedHashMap<>();
-            ev.put("package", packageName);
-            ev.put("result", ok ? "ok" : "fail");
-            trace.event("route_stop_app", ev);
-            try {
-                Thread.sleep(150);
-            } catch (InterruptedException ignored) {
-            }
-        } catch (Exception e) {
-            Map<String, Object> ev = new LinkedHashMap<>();
-            ev.put("package", packageName);
-            ev.put("err", String.valueOf(e));
-            trace.event("route_stop_err", ev);
-        }
-    }
 }

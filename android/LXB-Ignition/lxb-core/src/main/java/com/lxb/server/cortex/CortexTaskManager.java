@@ -67,6 +67,7 @@ public class CortexTaskManager {
     private static final String DEFAULT_RECORD_ROOT = "/sdcard/Movies/lxb";
     private final String schedulesPath;
     private final String taskRunsPath;
+    private final CortexTaskPersistence persistence = new CortexTaskPersistence();
 
     // Dedicated worker/scheduler threads.
     private final Thread workerThread;
@@ -263,13 +264,13 @@ public class CortexTaskManager {
         if (runAtMs <= 0) {
             throw new IllegalArgumentException("run_at is required and must be > 0");
         }
-        String repeatMode = normalizeRepeatMode(repeatModeRaw);
+        String repeatMode = CortexScheduleTime.normalizeRepeatMode(repeatModeRaw);
         long now = System.currentTimeMillis();
         int normalizedMask = (repeatWeekdays & 0x7F);
         if ("weekly".equals(repeatMode) && normalizedMask == 0) {
             throw new IllegalArgumentException("repeat_weekdays is required for weekly schedule");
         }
-        long firstRunAt = computeFirstRunAt(runAtMs, repeatMode, normalizedMask, now);
+        long firstRunAt = CortexScheduleTime.computeFirstRunAt(runAtMs, repeatMode, normalizedMask, now);
 
         ScheduledTaskDef def = new ScheduledTaskDef();
         def.scheduleId = UUID.randomUUID().toString();
@@ -341,7 +342,7 @@ public class CortexTaskManager {
             return null;
         }
 
-        String repeatMode = normalizeRepeatMode(repeatModeRaw);
+        String repeatMode = CortexScheduleTime.normalizeRepeatMode(repeatModeRaw);
         int normalizedMask = (repeatWeekdays & 0x7F);
         if ("weekly".equals(repeatMode) && normalizedMask == 0) {
             throw new IllegalArgumentException("repeat_weekdays is required for weekly schedule");
@@ -349,7 +350,7 @@ public class CortexTaskManager {
 
         synchronized (def) {
             long now = System.currentTimeMillis();
-            long firstRunAt = computeFirstRunAt(runAtMs, repeatMode, normalizedMask, now);
+            long firstRunAt = CortexScheduleTime.computeFirstRunAt(runAtMs, repeatMode, normalizedMask, now);
             Calendar c = Calendar.getInstance();
             c.setTimeInMillis(runAtMs);
 
@@ -434,9 +435,9 @@ public class CortexTaskManager {
                         long triggeredAt = now2;
                         def.lastTriggeredAt = triggeredAt;
                         if ("daily".equals(def.repeatMode)) {
-                            def.nextRunAt = computeNextDailyRun(def.hourOfDay, def.minuteOfHour, now2 + 1000L);
+                            def.nextRunAt = CortexScheduleTime.computeNextDailyRun(def.hourOfDay, def.minuteOfHour, now2 + 1000L);
                         } else if ("weekly".equals(def.repeatMode)) {
-                            def.nextRunAt = computeNextWeeklyRun(
+                            def.nextRunAt = CortexScheduleTime.computeNextWeeklyRun(
                                     def.hourOfDay,
                                     def.minuteOfHour,
                                     def.repeatWeekdays,
@@ -962,73 +963,19 @@ public class CortexTaskManager {
     }
 
     private void loadTaskMemoryFromDisk() {
-        try {
-            File f = new File(taskMemoryPath);
-            if (!f.exists() || !f.isFile()) {
-                return;
-            }
-            String json = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
-            Object parsed = Json.parse(json);
-            if (!(parsed instanceof Map)) {
-                return;
-            }
-            @SuppressWarnings("unchecked")
-            Map<String, Object> root = (Map<String, Object>) parsed;
-            Object byTaskObj = root.get("memory_by_task_key");
-            if (byTaskObj instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> m = (Map<String, Object>) byTaskObj;
-                for (Map.Entry<String, Object> e : m.entrySet()) {
-                    if (!(e.getValue() instanceof Map)) continue;
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> row = (Map<String, Object>) e.getValue();
-                    memoryByTaskKey.put(e.getKey(), new LinkedHashMap<String, Object>(row));
-                }
-            }
-            Object byScheduleObj = root.get("memory_by_schedule_id");
-            if (byScheduleObj instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> m = (Map<String, Object>) byScheduleObj;
-                for (Map.Entry<String, Object> e : m.entrySet()) {
-                    if (!(e.getValue() instanceof Map)) continue;
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> row = (Map<String, Object>) e.getValue();
-                    memoryByScheduleId.put(e.getKey(), new LinkedHashMap<String, Object>(row));
-                }
-            }
-        } catch (Exception ignored) {
-        }
+        persistence.loadTaskMemory(taskMemoryPath, memoryByTaskKey, memoryByScheduleId);
     }
 
     private void saveTaskMemoryToDisk() {
-        try {
-            File f = new File(taskMemoryPath);
-            File parent = f.getParentFile();
-            if (parent != null && !parent.exists()) {
-                //noinspection ResultOfMethodCallIgnored
-                parent.mkdirs();
-            }
-            Map<String, Object> root = new LinkedHashMap<String, Object>();
-            root.put("memory_by_task_key", new LinkedHashMap<String, Object>(memoryByTaskKey));
-            root.put("memory_by_schedule_id", new LinkedHashMap<String, Object>(memoryByScheduleId));
-            String json = Json.stringify(root);
-            Files.write(f.toPath(), json.getBytes(StandardCharsets.UTF_8));
-        } catch (Exception ignored) {
-        }
+        persistence.saveTaskMemory(taskMemoryPath, memoryByTaskKey, memoryByScheduleId);
     }
 
     private void loadSchedulesFromDisk() {
         try {
-            Map<String, Object> root = loadJsonRootWithBackup(schedulesPath);
-            if (root == null) {
+            List<Object> rows = persistence.loadRows(schedulesPath, "schedules");
+            if (rows == null) {
                 return;
             }
-            Object rowsObj = root.get("schedules");
-            if (!(rowsObj instanceof List)) {
-                return;
-            }
-            @SuppressWarnings("unchecked")
-            List<Object> rows = (List<Object>) rowsObj;
             long now = System.currentTimeMillis();
 
             scheduleRegistry.clear();
@@ -1075,27 +1022,17 @@ public class CortexTaskManager {
                 if (def == null) continue;
                 rows.add(snapshotSchedule(def));
             }
-            Map<String, Object> root = new LinkedHashMap<String, Object>();
-            root.put("schema_version", "schedules.v1");
-            root.put("updated_at", System.currentTimeMillis());
-            root.put("schedules", rows);
-            writeJsonAtomically(schedulesPath, Json.stringify(root));
+            persistence.saveRows(schedulesPath, "schedules.v1", "schedules", rows);
         } catch (Exception ignored) {
         }
     }
 
     private void loadTaskRunsFromDisk() {
         try {
-            Map<String, Object> root = loadJsonRootWithBackup(taskRunsPath);
-            if (root == null) {
+            List<Object> rows = persistence.loadRows(taskRunsPath, "tasks");
+            if (rows == null) {
                 return;
             }
-            Object rowsObj = root.get("tasks");
-            if (!(rowsObj instanceof List)) {
-                return;
-            }
-            @SuppressWarnings("unchecked")
-            List<Object> rows = (List<Object>) rowsObj;
 
             taskRegistry.clear();
             synchronized (taskOrder) {
@@ -1156,11 +1093,7 @@ public class CortexTaskManager {
                 if (inst == null) continue;
                 rows.add(snapshotTaskRun(inst));
             }
-            Map<String, Object> root = new LinkedHashMap<String, Object>();
-            root.put("schema_version", "task_runs.v1");
-            root.put("updated_at", System.currentTimeMillis());
-            root.put("tasks", rows);
-            writeJsonAtomically(taskRunsPath, Json.stringify(root));
+            persistence.saveRows(taskRunsPath, "task_runs.v1", "tasks", rows);
         } catch (Exception ignored) {
         }
     }
@@ -1246,7 +1179,7 @@ public class CortexTaskManager {
             def.userPlaybook = stringOrEmpty(row.get("user_playbook"));
             def.recordEnabled = toBool(row.get("record_enabled"), false);
             def.runAtMs = toLong(row.get("run_at"), 0L);
-            def.repeatMode = normalizeRepeatMode(stringOrEmpty(row.get("repeat_mode")));
+            def.repeatMode = CortexScheduleTime.normalizeRepeatMode(stringOrEmpty(row.get("repeat_mode")));
             def.repeatWeekdays = toInt(row.get("repeat_weekdays"), 0) & 0x7F;
             if ("weekly".equals(def.repeatMode) && def.repeatWeekdays == 0) {
                 def.repeatWeekdays = 0b0011111;
@@ -1271,11 +1204,11 @@ public class CortexTaskManager {
                     }
                 } else if ("daily".equals(def.repeatMode)) {
                     if (def.nextRunAt <= 0L) {
-                        def.nextRunAt = computeNextDailyRun(def.hourOfDay, def.minuteOfHour, now);
+                        def.nextRunAt = CortexScheduleTime.computeNextDailyRun(def.hourOfDay, def.minuteOfHour, now);
                     }
                 } else if ("weekly".equals(def.repeatMode)) {
                     if (def.nextRunAt <= 0L) {
-                        def.nextRunAt = computeNextWeeklyRun(
+                        def.nextRunAt = CortexScheduleTime.computeNextWeeklyRun(
                                 def.hourOfDay,
                                 def.minuteOfHour,
                                 def.repeatWeekdays,
@@ -1318,55 +1251,6 @@ public class CortexTaskManager {
         return "true".equalsIgnoreCase(s) || "1".equals(s);
     }
 
-    private static Map<String, Object> loadJsonRootWithBackup(String path) {
-        Object primary = parseJsonFile(path);
-        if (primary instanceof Map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> root = (Map<String, Object>) primary;
-            return root;
-        }
-        Object backup = parseJsonFile(path + ".bak");
-        if (backup instanceof Map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> root = (Map<String, Object>) backup;
-            return root;
-        }
-        return null;
-    }
-
-    private static Object parseJsonFile(String path) {
-        try {
-            File f = new File(path);
-            if (!f.exists() || !f.isFile()) return null;
-            String s = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
-            return Json.parse(s);
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    private static void writeJsonAtomically(String path, String json) throws Exception {
-        File target = new File(path);
-        File parent = target.getParentFile();
-        if (parent != null && !parent.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            parent.mkdirs();
-        }
-        File tmp = new File(path + ".tmp");
-        File bak = new File(path + ".bak");
-        Files.write(tmp.toPath(), json.getBytes(StandardCharsets.UTF_8));
-        if (target.exists()) {
-            //noinspection ResultOfMethodCallIgnored
-            bak.delete();
-            //noinspection ResultOfMethodCallIgnored
-            target.renameTo(bak);
-        }
-        if (!tmp.renameTo(target)) {
-            Files.write(target.toPath(), json.getBytes(StandardCharsets.UTF_8));
-            //noinspection ResultOfMethodCallIgnored
-            tmp.delete();
-        }
-    }
 
     private static class ScheduledTaskDef {
         String scheduleId;
@@ -1416,131 +1300,6 @@ public class CortexTaskManager {
         return out;
     }
 
-    private static long computeNextDailyRun(int hour, int minute, long baseMs) {
-        Calendar now = Calendar.getInstance();
-        now.setTimeInMillis(baseMs);
-
-        Calendar next = Calendar.getInstance();
-        next.setTimeInMillis(baseMs);
-        next.set(Calendar.SECOND, 0);
-        next.set(Calendar.MILLISECOND, 0);
-        next.set(Calendar.HOUR_OF_DAY, hour);
-        next.set(Calendar.MINUTE, minute);
-        if (next.getTimeInMillis() <= now.getTimeInMillis()) {
-            next.add(Calendar.DAY_OF_MONTH, 1);
-        }
-        return next.getTimeInMillis();
-    }
-
-    private static long computeNextWeeklyRun(int hour, int minute, int weekdaysMask, long baseMs) {
-        if ((weekdaysMask & 0x7F) == 0) {
-            return 0L;
-        }
-        Calendar base = Calendar.getInstance();
-        base.setTimeInMillis(baseMs);
-        long best = Long.MAX_VALUE;
-        for (int offset = 0; offset <= 7; offset++) {
-            Calendar cand = (Calendar) base.clone();
-            cand.add(Calendar.DAY_OF_MONTH, offset);
-            cand.set(Calendar.SECOND, 0);
-            cand.set(Calendar.MILLISECOND, 0);
-            cand.set(Calendar.HOUR_OF_DAY, hour);
-            cand.set(Calendar.MINUTE, minute);
-            int dayIndex = toMonFirstDayIndex(cand.get(Calendar.DAY_OF_WEEK));
-            if (((weekdaysMask >> dayIndex) & 1) == 0) {
-                continue;
-            }
-            long t = cand.getTimeInMillis();
-            if (t > baseMs && t < best) {
-                best = t;
-            }
-        }
-        if (best != Long.MAX_VALUE) {
-            return best;
-        }
-        // Fallback: next selected day in the following week.
-        for (int offset = 1; offset <= 14; offset++) {
-            Calendar cand = (Calendar) base.clone();
-            cand.add(Calendar.DAY_OF_MONTH, offset);
-            cand.set(Calendar.SECOND, 0);
-            cand.set(Calendar.MILLISECOND, 0);
-            cand.set(Calendar.HOUR_OF_DAY, hour);
-            cand.set(Calendar.MINUTE, minute);
-            int dayIndex = toMonFirstDayIndex(cand.get(Calendar.DAY_OF_WEEK));
-            if (((weekdaysMask >> dayIndex) & 1) == 1) {
-                return cand.getTimeInMillis();
-            }
-        }
-        return 0L;
-    }
-
-    // Convert Calendar day to Mon=0 ... Sun=6.
-    private static int toMonFirstDayIndex(int dayOfWeek) {
-        switch (dayOfWeek) {
-            case Calendar.MONDAY:
-                return 0;
-            case Calendar.TUESDAY:
-                return 1;
-            case Calendar.WEDNESDAY:
-                return 2;
-            case Calendar.THURSDAY:
-                return 3;
-            case Calendar.FRIDAY:
-                return 4;
-            case Calendar.SATURDAY:
-                return 5;
-            case Calendar.SUNDAY:
-            default:
-                return 6;
-        }
-    }
-
-    private static boolean isWeekdaySelected(long whenMs, int weekdaysMask) {
-        Calendar c = Calendar.getInstance();
-        c.setTimeInMillis(whenMs);
-        int dayIndex = toMonFirstDayIndex(c.get(Calendar.DAY_OF_WEEK));
-        return ((weekdaysMask >> dayIndex) & 1) == 1;
-    }
-
-    private static String normalizeRepeatMode(String repeatModeRaw) {
-        String s = repeatModeRaw != null ? repeatModeRaw.trim().toLowerCase() : "";
-        if ("daily".equals(s) || "weekly".equals(s) || "once".equals(s)) {
-            return s;
-        }
-        return "once";
-    }
-
-    private static long computeFirstRunAt(long runAtMs, String repeatMode, int repeatWeekdays, long now) {
-        if ("daily".equals(repeatMode)) {
-            if (runAtMs > now) {
-                return runAtMs;
-            }
-            Calendar c = Calendar.getInstance();
-            c.setTimeInMillis(runAtMs);
-            return computeNextDailyRun(
-                    c.get(Calendar.HOUR_OF_DAY),
-                    c.get(Calendar.MINUTE),
-                    now
-            );
-        }
-        if ("weekly".equals(repeatMode)) {
-            if (runAtMs > now && isWeekdaySelected(runAtMs, repeatWeekdays)) {
-                return runAtMs;
-            }
-            Calendar c = Calendar.getInstance();
-            c.setTimeInMillis(runAtMs);
-            return computeNextWeeklyRun(
-                    c.get(Calendar.HOUR_OF_DAY),
-                    c.get(Calendar.MINUTE),
-                    repeatWeekdays,
-                    now
-            );
-        }
-        if (runAtMs <= now) {
-            throw new IllegalArgumentException("run_at must be in the future for one-shot schedule");
-        }
-        return runAtMs;
-    }
 
     private static String resolveTaskMemoryPath() {
         String override = System.getProperty("lxb.task.memory.path");

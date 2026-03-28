@@ -2,6 +2,7 @@ package com.lxb.server.cortex;
 
 import com.lxb.server.cortex.json.Json;
 import com.lxb.server.cortex.dump.DumpActionsParser;
+import com.lxb.server.cortex.fsm.VisionCommandParser;
 import com.lxb.server.execution.ExecutionEngine;
 import com.lxb.server.perception.PerceptionEngine;
 
@@ -979,7 +980,7 @@ public class CortexFsmEngine {
         enterEv.put("state", State.TASK_DECOMPOSE.name());
         trace.event("fsm_state_enter", enterEv);
 
-        String prompt = buildTaskDecomposePrompt(ctx);
+        String prompt = CortexLlmHelper.buildTaskDecomposePrompt(ctx);
         Map<String, Object> promptEv = new LinkedHashMap<>();
         promptEv.put("task_id", ctx.taskId);
         promptEv.put("state", State.TASK_DECOMPOSE.name());
@@ -988,7 +989,7 @@ public class CortexFsmEngine {
 
         try {
             LlmConfig cfg = LlmConfig.loadDefault();
-            String raw = llmClient.chatOnce(cfg, buildTaskDecomposeSystemPrompt(), prompt);
+            String raw = llmClient.chatOnce(cfg, CortexLlmHelper.buildTaskDecomposeSystemPrompt(), prompt);
 
             Map<String, Object> respEv = new LinkedHashMap<>();
             respEv.put("task_id", ctx.taskId);
@@ -997,7 +998,7 @@ public class CortexFsmEngine {
             respEv.put("response", snippet != null ? snippet : "");
             trace.event("llm_response_task_decompose", respEv);
 
-            Map<String, Object> obj = extractJsonObjectFromText(raw);
+            Map<String, Object> obj = CortexLlmHelper.extractJsonObjectFromText(raw);
             if (!obj.isEmpty()) {
                 List<SubTask> subs = parseSubTasksFromObject(obj);
                 if (!subs.isEmpty()) {
@@ -1028,84 +1029,6 @@ public class CortexFsmEngine {
         // For now, always proceed to APP_RESOLVE. Even if decomposition fails,
         // the legacy single-task pipeline remains functional.
         return State.APP_RESOLVE;
-    }
-
-    /**
-     * Build prompt for TASK_DECOMPOSE.
-     */
-    private String buildTaskDecomposePrompt(Context ctx) {
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (Map<String, Object> c : ctx.appCandidates) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            String pkg = stringOrEmpty(c.get("package"));
-            String label = stringOrEmpty(c.get("label"));
-            if (label.isEmpty()) {
-                label = stringOrEmpty(c.get("name"));
-            }
-            if (pkg.isEmpty()) continue;
-            row.put("package", pkg);
-            row.put("label", label.isEmpty() ? null : label);
-            rows.add(row);
-        }
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("apps", rows);
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("You are an assistant that decomposes a high-level Android user task into a small number of high-level sub_tasks.\n");
-        sb.append("User task (Chinese or English):\n");
-        sb.append(ctx.userTask != null ? ctx.userTask : "").append("\n\n");
-        sb.append("Installed apps (JSON array with {\"package\",\"label\"}):\n");
-        sb.append("(label may be null; when null, infer app intent from package id)\n");
-        sb.append(Json.stringify(payload)).append("\n\n");
-        sb.append("Output JSON only, no extra text:\n");
-        sb.append("{\"sub_tasks\":[{...}],\"task_type\":\"single|loop|mixed\"}\n");
-        sb.append("Definition of sub_task (very important):\n");
-        sb.append("- A sub_task is a self-contained sub-goal that the agent can execute as a mini-workflow.\n");
-        sb.append("- It is NOT a single UI click or a tiny step inside one screen.\n");
-        sb.append("- It usually corresponds to one user-intent like \"view my followers\" or \"send a message with a link\".\n");
-        sb.append("- All low-level UI steps (open app, tap tabs, tap buttons) to achieve that intent belong INSIDE one sub_task, not as separate sub_tasks.\n");
-        sb.append("\n");
-        sb.append("When to create multiple sub_tasks:\n");
-        sb.append("- If the user describes multiple distinct goals or phases, even in the same app, use multiple sub_tasks.\n");
-        sb.append("  Example: \"open Xiaohongshu, check my followers, then check my following\" ->\n");
-        sb.append("    sub_task_1: open Xiaohongshu and view my followers.\n");
-        sb.append("    sub_task_2: open Xiaohongshu and view my following.\n");
-        sb.append("- If the user task involves multiple apps (e.g., copy link in app A, send link in app B), use multiple sub_tasks (one per high-level goal).\n");
-        sb.append("- If the task is a single simple goal in one app, use exactly one sub_task.\n");
-        sb.append("\n");
-        sb.append("What NOT to do (wrong decomposition):\n");
-        sb.append("- Do NOT break a single high-level goal into micro-steps per click.\n");
-        sb.append("  Wrong: \"open app\", \"tap Me\", \"tap Followers\" as three sub_tasks.\n");
-        sb.append("  Correct: one sub_task \"open the app and view my followers\".\n");
-        sb.append("- Do NOT create one sub_task per UI element on a single page.\n");
-        sb.append("\n");
-        sb.append("Meaning of modes:\n");
-        sb.append("- mode=\"single\": the sub_task is executed once and has a single completion condition.\n");
-        sb.append("  Examples: post one dynamic, send one message, view my followers once.\n");
-        sb.append("- mode=\"loop\": the sub_task needs to repeat an operation over a set of items whose size is not known from the text.\n");
-        sb.append("  Examples: sign in to all forums, like all unread posts, clear all unread notifications.\n");
-        sb.append("- For loop sub_tasks, do NOT create one sub_task per item; instead create a single loop sub_task that covers all items.\n");
-        sb.append("\n");
-        sb.append("Each sub_task MUST have fields: id, description, mode, inputs, outputs, success_criteria.\n");
-        sb.append("Optional fields are allowed (for example app_hint), but they are not required.\n");
-        sb.append("Additional rules:\n");
-        sb.append("1) mode is either \"single\" or \"loop\".\n");
-        sb.append("2) For loop sub_tasks, add loop_metadata with loop_unit, loop_target_condition, loop_termination_criteria, max_iterations.\n");
-        sb.append("3) If the task is simple and fits in one app, return a single sub_task.\n");
-        sb.append("4) For multi-app tasks, break into multiple sub_tasks and wire outputs/inputs.\n");
-        sb.append("5) sub_tasks count should usually be between 1 and 5, never dozens.\n");
-        sb.append("6) Do NOT output markdown, code fences, or comments.\n");
-        return sb.toString();
-    }
-
-    /**
-     * System prompt for TASK_DECOMPOSE to enforce JSON-only output.
-     */
-    private String buildTaskDecomposeSystemPrompt() {
-        return "You are an assistant that decomposes a high-level Android user task into a small number of high-level sub_tasks for an automation agent.\n"
-                + "sub_tasks are independent sub-goals (like \"view my followers\" or \"send a link\"), NOT individual button clicks.\n"
-                + "You MUST output strict JSON with fields: sub_tasks (array) and task_type.\n"
-                + "Do not output markdown, code fences, or any commentary outside the JSON.";
     }
 
     @SuppressWarnings("unchecked")
@@ -1168,111 +1091,6 @@ public class CortexFsmEngine {
         return subs;
     }
 
-    /**
-     * Build LLM prompt for APP_RESOLVE, similar in spirit to Python PromptBuilder(APP_RESOLVE).
-     */
-    private String buildAppResolvePrompt(Context ctx) {
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (Map<String, Object> c : ctx.appCandidates) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            String pkg = stringOrEmpty(c.get("package"));
-            String label = stringOrEmpty(c.get("label"));
-            if (label.isEmpty()) {
-                label = stringOrEmpty(c.get("name"));
-            }
-            if (pkg.isEmpty()) continue;
-            row.put("package", pkg);
-            row.put("label", label.isEmpty() ? null : label);
-            rows.add(row);
-        }
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("apps", rows);
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("You are an assistant that selects the best Android app to handle a task.\n");
-        sb.append("User task (Chinese or English):\n");
-        sb.append(ctx.userTask != null ? ctx.userTask : "").append("\n\n");
-        sb.append("Installed apps (JSON array with {\"package\",\"label\"}):\n");
-        sb.append("(label may be null; when null, infer app intent from package id)\n");
-        sb.append(Json.stringify(payload)).append("\n\n");
-        sb.append("Output JSON only, no extra text:\n");
-        sb.append("{\"package_name\":\"one_package_from_apps\"}\n");
-        sb.append("Rules:\n");
-        sb.append("1) package_name MUST be exactly one of the \"package\" values above.\n");
-        sb.append("2) package_name MUST be a package id string (e.g., com.tencent.mm), NOT app label/name (e.g., 微信).\n");
-        sb.append("3) If the task clearly refers to a specific brand (e.g., Bilibili, Taobao), map it to that app.\n");
-        sb.append("4) If ambiguous, choose the app that typical users would most likely use.\n");
-        sb.append("5) Do NOT explain, do NOT add markdown, do NOT add comments.\n");
-        return sb.toString();
-    }
-
-    /**
-     * System prompt for APP_RESOLVE to mirror Python-side LLM usage:
-     * - clearly separates system role from user prompt
-     * - enforces JSON-only output with package_name field.
-     */
-    private String buildAppResolveSystemPrompt() {
-        return "You are an assistant that selects the best Android app to handle a task.\n"
-                + "You MUST output strict JSON only with a single field: package_name.\n"
-                + "package_name must be an installed package id (contains dots), never a human-readable app label.\n"
-                + "Do not output markdown or any extra commentary.";
-    }
-
-    /**
-     * Extract package_name from LLM JSON response.
-     */
-    @SuppressWarnings("unchecked")
-    private String extractPackageFromResponse(String raw) {
-        Map<String, Object> obj = extractJsonObjectFromText(raw);
-        if (obj.isEmpty()) {
-            return "";
-        }
-        String pkg = stringOrEmpty(obj.get("package_name"));
-        if (pkg.isEmpty()) {
-            pkg = stringOrEmpty(obj.get("package"));
-        }
-        return pkg;
-    }
-
-    /**
-     * Best-effort extraction of a JSON object from arbitrary text.
-     *
-     * Mirrors the Python-side _extract_json_object helper and the Java MapPromptPlanner
-     * implementation so that we can recover even when the model wraps JSON in prose
-     * or markdown/code fences.
-     */
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> extractJsonObjectFromText(String text) {
-        String s = text != null ? text.trim() : "";
-        if (s.isEmpty()) {
-            return new LinkedHashMap<String, Object>();
-        }
-        // 1) Direct parse as an object.
-        try {
-            Map<String, Object> obj = Json.parseObject(s);
-            if (obj != null) {
-                return obj;
-            }
-        } catch (Exception ignored) {
-        }
-
-        // 2) Fallback: slice between first '{' and last '}' and parse that.
-        int start = s.indexOf('{');
-        int end = s.lastIndexOf('}');
-        if (start == -1 || end == -1 || end <= start) {
-            return new LinkedHashMap<String, Object>();
-        }
-        String slice = s.substring(start, end + 1);
-        try {
-            Map<String, Object> obj = Json.parseObject(slice);
-            if (obj != null) {
-                return obj;
-            }
-        } catch (Exception ignored) {
-        }
-        return new LinkedHashMap<String, Object>();
-    }
-
     // ===== Instruction parsing (Java port of fsm_instruction.py) =====
     private static class Instruction {
         final String op;
@@ -1292,173 +1110,36 @@ public class CortexFsmEngine {
         }
     }
 
-    private static final Map<String, int[]> INSTRUCTION_ARITY = new LinkedHashMap<>();
-
-    static {
-        INSTRUCTION_ARITY.put("SET_APP", new int[]{1, 1});
-        INSTRUCTION_ARITY.put("ROUTE", new int[]{2, 2});
-        INSTRUCTION_ARITY.put("TAP", new int[]{2, 2});
-        INSTRUCTION_ARITY.put("SWIPE", new int[]{5, 5});
-        INSTRUCTION_ARITY.put("INPUT", new int[]{1, 1});
-        INSTRUCTION_ARITY.put("WAIT", new int[]{1, 1});
-        INSTRUCTION_ARITY.put("BACK", new int[]{0, 0});
-        // DONE can optionally carry a natural-language summary tail.
-        INSTRUCTION_ARITY.put("DONE", new int[]{0, 9999});
-        INSTRUCTION_ARITY.put("FAIL", new int[]{1, 9999});
-    }
-
     private static List<Instruction> parseInstructions(String text, int maxCommands) throws InstructionError {
-        String[] lines = (text != null ? text : "").split("\\r?\\n");
-        List<String> nonEmpty = new ArrayList<>();
-        for (String line : lines) {
-            String trimmed = line.trim();
-            if (!trimmed.isEmpty()) {
-                nonEmpty.add(trimmed);
+        try {
+            List<VisionCommandParser.Instruction> parsed = VisionCommandParser.parseInstructions(text, maxCommands);
+            List<Instruction> out = new ArrayList<Instruction>();
+            for (VisionCommandParser.Instruction ins : parsed) {
+                out.add(new Instruction(ins.op, new ArrayList<String>(ins.args), ins.raw));
             }
+            return out;
+        } catch (VisionCommandParser.InstructionError e) {
+            throw new InstructionError(e.getMessage());
         }
-        if (nonEmpty.isEmpty()) {
-            throw new InstructionError("empty instruction output");
-        }
-        if (nonEmpty.size() > maxCommands) {
-            throw new InstructionError("too many instructions: " + nonEmpty.size() + " > " + maxCommands);
-        }
-
-        List<Instruction> out = new ArrayList<>();
-        for (String line : nonEmpty) {
-            List<String> parts = shellSplit(line);
-            if (parts.isEmpty()) continue;
-            String op = parts.get(0).trim().toUpperCase();
-            List<String> args = parts.subList(1, parts.size());
-            validateArity(op, args);
-            out.add(new Instruction(op, new ArrayList<>(args), line));
-        }
-        if (out.isEmpty()) {
-            throw new InstructionError("no valid instructions parsed");
-        }
-        return out;
     }
 
     private static void validateAllowed(List<Instruction> instructions, java.util.Set<String> allowedOps) throws InstructionError {
-        java.util.Set<String> allowed = new java.util.HashSet<>();
-        for (String op : allowedOps) {
-            allowed.add(op.toUpperCase());
-        }
+        List<VisionCommandParser.Instruction> converted = new ArrayList<VisionCommandParser.Instruction>();
         for (Instruction ins : instructions) {
-            if (!allowed.contains(ins.op)) {
-                throw new InstructionError("op not allowed in this state: " + ins.op);
-            }
+            converted.add(new VisionCommandParser.Instruction(ins.op, new ArrayList<String>(ins.args), ins.raw));
         }
-    }
-
-    private static void validateArity(String op, List<String> args) throws InstructionError {
-        int[] range = INSTRUCTION_ARITY.get(op);
-        if (range == null) {
-            throw new InstructionError("unknown instruction op: " + op);
+        try {
+            VisionCommandParser.validateAllowed(converted, allowedOps);
+        } catch (VisionCommandParser.InstructionError e) {
+            throw new InstructionError(e.getMessage());
         }
-        int n = args.size();
-        int min = range[0];
-        int max = range[1];
-        if (n < min || n > max) {
-            String expected = (min == max) ? String.valueOf(min) : (min + ".." + max);
-            throw new InstructionError(op + " expects " + expected + " args, got " + n);
-        }
-    }
-
-    // Very small shell-like splitter that understands quotes for INPUT "text".
-    private static List<String> shellSplit(String line) throws InstructionError {
-        List<String> out = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        boolean inQuotes = false;
-        char quoteChar = 0;
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-            if (inQuotes) {
-                if (c == quoteChar) {
-                    inQuotes = false;
-                } else {
-                    current.append(c);
-                }
-            } else {
-                if (c == '\'' || c == '\"') {
-                    inQuotes = true;
-                    quoteChar = c;
-                } else if (Character.isWhitespace(c)) {
-                    if (current.length() > 0) {
-                        out.add(current.toString());
-                        current.setLength(0);
-                    }
-                } else {
-                    current.append(c);
-                }
-            }
-        }
-        if (inQuotes) {
-            throw new InstructionError("invalid instruction quoting: " + line);
-        }
-        if (current.length() > 0) {
-            out.add(current.toString());
-        }
-        return out;
     }
 
     /**
      * Extract content between XML-like tags, Java port of _extract_tag_text.
      */
     private static String extractTagText(String text, String tag) {
-        if (text == null || text.isEmpty() || tag == null || tag.isEmpty()) {
-            return "";
-        }
-        String safeTag = Pattern.quote(tag);
-        // Preferred: strict paired tags.
-        String strict = "(?is)<\\s*" + safeTag + "\\s*>\\s*([\\s\\S]*?)\\s*</\\s*" + safeTag + "\\s*>";
-        Matcher m = Pattern.compile(strict, Pattern.CASE_INSENSITIVE).matcher(text);
-        if (m.find()) {
-            return m.group(1).trim();
-        }
-        // Fallback: opening tag exists but closing tag is missing.
-        // Capture until next sibling opening tag or end of text.
-        String openOnly = "(?is)<\\s*" + safeTag + "\\s*>\\s*([\\s\\S]*?)(?=<\\s*[A-Za-z_][A-Za-z0-9_]*\\s*>|$)";
-        Matcher m2 = Pattern.compile(openOnly, Pattern.CASE_INSENSITIVE).matcher(text);
-        if (m2.find()) {
-            return m2.group(1).trim();
-        }
-        return "";
-    }
-
-    /**
-     * Normalize model output to DSL commands, Java port of Python _normalize_model_output.
-     */
-    private String normalizeModelOutput(String raw, State state, Context ctx) {
-        String text = raw != null ? raw.trim() : "";
-        if (text.isEmpty() || !text.startsWith("{")) {
-            return text;
-        }
-        Map<String, Object> obj;
-        try {
-            obj = Json.parseObject(text);
-        } catch (Exception e) {
-            return text;
-        }
-        if (state == State.APP_RESOLVE) {
-            String pkg = stringOrEmpty(obj.get("package_name"));
-            if (pkg.isEmpty()) {
-                pkg = stringOrEmpty(obj.get("package"));
-            }
-            if (!pkg.isEmpty()) {
-                return "SET_APP " + pkg;
-            }
-        }
-        if (state == State.ROUTE_PLAN) {
-            String pkg = stringOrEmpty(obj.get("package_name"));
-            if (pkg.isEmpty()) {
-                pkg = ctx.selectedPackage != null ? ctx.selectedPackage : "";
-            }
-            String target = stringOrEmpty(obj.get("target_page"));
-            if (!pkg.isEmpty() && !target.isEmpty()) {
-                return "ROUTE " + pkg + " " + target;
-            }
-        }
-        return text;
+        return VisionCommandParser.extractTagText(text, tag);
     }
 
     /**
@@ -1549,7 +1230,7 @@ public class CortexFsmEngine {
         }
 
         // 3) Build prompt and call end-side LLM to choose package.
-        String prompt = buildAppResolvePrompt(ctx);
+        String prompt = CortexLlmHelper.buildAppResolvePrompt(ctx);
         Map<String, Object> promptEv = new LinkedHashMap<>();
         promptEv.put("task_id", ctx.taskId);
         promptEv.put("state", State.APP_RESOLVE.name());
@@ -1562,7 +1243,7 @@ public class CortexFsmEngine {
 
         try {
             LlmConfig cfg = LlmConfig.loadDefault();
-            raw = llmClient.chatOnce(cfg, buildAppResolveSystemPrompt(), prompt);
+            raw = llmClient.chatOnce(cfg, CortexLlmHelper.buildAppResolveSystemPrompt(), prompt);
 
             Map<String, Object> respEv = new LinkedHashMap<>();
             respEv.put("task_id", ctx.taskId);
@@ -1571,7 +1252,7 @@ public class CortexFsmEngine {
             respEv.put("response", snippet != null ? snippet : "");
             trace.event("llm_response_app_resolve", respEv);
 
-            chosenPackage = extractPackageFromResponse(raw);
+            chosenPackage = CortexLlmHelper.extractPackageFromResponse(raw);
             if (!chosenPackage.isEmpty() && !isKnownCandidatePackage(ctx, chosenPackage)) {
                 usedFallback = true;
                 Map<String, Object> invalidEv = new LinkedHashMap<>();
@@ -2291,7 +1972,7 @@ public class CortexFsmEngine {
             respEv.put("response", raw != null && raw.length() > 2000 ? raw.substring(0, 2000) + "..." : raw);
             trace.event("llm_response_routing_recovery", respEv);
 
-            String normalized = normalizeModelOutput(raw, State.VISION_ACT, ctx);
+            String normalized = CortexLlmHelper.normalizeModelOutput(raw, State.VISION_ACT, ctx);
             List<Instruction> cmds = parseInstructions(normalized, 1);
             if (cmds == null || cmds.isEmpty()) {
                 return false;
@@ -3296,41 +2977,8 @@ public class CortexFsmEngine {
      * Java port of Python _extract_structured_command for CortexState.VISION_ACT.
      */
     private ExtractResult extractStructuredCommandForVision(String raw) {
-        String text = raw != null ? raw.trim() : "";
-        if (text.isEmpty()) {
-            return new ExtractResult("", new LinkedHashMap<String, Object>());
-        }
-
-        String cmd = extractTagText(text, "command");
-        if (cmd.isEmpty()) {
-            // No command tag 鈥?keep raw text as command and no structured fields.
-            return new ExtractResult(text, new LinkedHashMap<String, Object>());
-        }
-
-        String rootContent = extractTagText(text, "vision_analysis");
-        if (rootContent.isEmpty()) {
-            // Soft fallback: command only if top-level root is missing.
-            return new ExtractResult(cmd.trim(), new LinkedHashMap<String, Object>());
-        }
-
-        Map<String, Object> fields = new LinkedHashMap<>();
-        fields.put("root", "vision_analysis");
-        String[] names = new String[]{
-                "page_state",
-                "step_review",
-                "reflection",
-                "next_step_reasoning",
-                "completion_gate",
-                "done_confirm",
-                "lesson"
-        };
-        for (String name : names) {
-            String fv = extractTagText(rootContent, name);
-            if (!fv.isEmpty()) {
-                fields.put(name, fv.trim());
-            }
-        }
-        return new ExtractResult(cmd.trim(), fields);
+        VisionCommandParser.ExtractResult result = VisionCommandParser.extractStructuredCommandForVision(raw);
+        return new ExtractResult(result.commandText, result.structured);
     }
 
     /**
@@ -3573,7 +3221,7 @@ public class CortexFsmEngine {
                 }
 
                 // Normalize JSON outputs to DSL if needed.
-                normalized = normalizeModelOutput(commandText, State.VISION_ACT, ctx);
+                normalized = CortexLlmHelper.normalizeModelOutput(commandText, State.VISION_ACT, ctx);
                 commands = parseInstructions(normalized, 1);
                 validateAllowed(commands, VISION_ALLOWED_OPS);
             } catch (Exception e) {
