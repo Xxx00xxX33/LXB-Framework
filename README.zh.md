@@ -1,8 +1,8 @@
-# LXB-Framework
+﻿# LXB-Framework
 
 <img src="resources/logo.jpg" alt="LXB Logo" width="180" />
 
-[English](README.md) | [中文](README.zh.md)
+[English](README.en.md) | [中文](README.md)
 
 实验性安卓端自动化框架，专注于高频、线性的日常任务自动执行。
 框架不依赖大模型去"自由探索"页面，而是采用 **Route-Then-Act** 流水线：预构建的导航地图负责确定性的页面跳转，视觉大模型只在真正"干活"时才介入。
@@ -88,3 +88,4 @@
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。
+

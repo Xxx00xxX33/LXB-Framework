@@ -3,7 +3,7 @@
 ## 当前维护文档
 
 1. [端侧架构总览](on_device_architecture.md)
-2. [项目快速开始（根 README）](../../README.zh.md)
+2. [项目快速开始（根 README）](../../README.md)
 
 ## 代码权威来源
 
@@ -27,3 +27,4 @@
 1. 文档与代码冲突时，以代码为准。
 2. 文档优先对齐 Android 端侧运行时。
 3. 新功能优先更新 `on_device_architecture.md`。
+
