@@ -394,6 +394,12 @@ private val ZhMap = mapOf(
     "ADB start" to "ADB 启动",
     "Use Wireless ADB bootstrap path. Pair once, then tap start." to "使用无线 ADB 引导路径，先完成配对，再点击启动。",
     "Start via ADB" to "通过 ADB 启动",
+    "Before starting (ADB path):" to "开始前准备（ADB 路径）：",
+    "- USB debugging must be enabled, otherwise process keepalive may fail." to "- 必须开启 USB 调试，否则进程可能无法保活。",
+    "- MIUI / HyperOS: enable \"USB debugging (Security settings)\". This is separate from \"USB debugging\"." to "- MIUI / HyperOS：开启“USB 调试（安全设置）”，注意它和“USB 调试”是两个选项。",
+    "- ColorOS (OPPO / OnePlus): disable \"Permission monitoring\" in Developer options." to "- ColorOS（OPPO / OnePlus）：在开发者选项中关闭“权限监控”。",
+    "- Flyme: disable \"Flyme payment protection\" in Developer options." to "- Flyme：在开发者选项中关闭“Flyme 支付保护”。",
+    "Reference: ROM-specific notes above are adapted from Shizuku docs." to "说明：以上 ROM 特殊设置参考自 Shizuku 文档。",
     "Root direct start" to "Root 直启",
     "Root start" to "Root 启动",
     "For rooted phones: start lxb-core directly via su. No Wireless ADB guide required." to "Root 手机可直接通过 su 启动 lxb-core，无需走无线 ADB 引导。",
@@ -1415,6 +1421,38 @@ fun AdbStartCard(
                 tr("Use Wireless ADB bootstrap path. Pair once, then tap start."),
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
                 fontSize = 12.sp
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    tr("Before starting (ADB path):"),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                    fontSize = 12.sp
+                )
+                Text(
+                    tr("- USB debugging must be enabled, otherwise process keepalive may fail."),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                    fontSize = 12.sp
+                )
+                Text(
+                    tr("- MIUI / HyperOS: enable \"USB debugging (Security settings)\". This is separate from \"USB debugging\"."),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                    fontSize = 12.sp
+                )
+                Text(
+                    tr("- ColorOS (OPPO / OnePlus): disable \"Permission monitoring\" in Developer options."),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                    fontSize = 12.sp
+                )
+                Text(
+                    tr("- Flyme: disable \"Flyme payment protection\" in Developer options."),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                    fontSize = 12.sp
+                )
+            }
+            Text(
+                tr("Reference: ROM-specific notes above are adapted from Shizuku docs."),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                fontSize = 11.sp
             )
             OutlinedButton(
                 onClick = onStartAdb,
