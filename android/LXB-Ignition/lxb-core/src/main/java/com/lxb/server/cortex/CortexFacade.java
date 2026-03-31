@@ -3,6 +3,7 @@ package com.lxb.server.cortex;
 import com.lxb.server.execution.ExecutionEngine;
 import com.lxb.server.perception.PerceptionEngine;
 import com.lxb.server.cortex.json.Json;
+import com.lxb.server.cortex.notify.NotificationTriggerModule;
 import com.lxb.server.cortex.route.RouteExecutionService;
 
 import java.io.ByteArrayInputStream;
@@ -38,6 +39,7 @@ public class CortexFacade {
     private final CortexFsmEngine fsmEngine;
     private final CortexTaskManager taskManager;
     private final RouteExecutionService routeExecutionService;
+    private final NotificationTriggerModule notificationTriggerModule;
 
     public CortexFacade(PerceptionEngine perceptionEngine, ExecutionEngine executionEngine) {
         this.perceptionEngine = perceptionEngine;
@@ -54,6 +56,7 @@ public class CortexFacade {
                 locatorResolver,
                 trace
         );
+        this.notificationTriggerModule = new NotificationTriggerModule(taskManager, trace);
     }
 
     public byte[] handleMapSetGz(byte[] payload) {
@@ -743,6 +746,71 @@ public class CortexFacade {
             Map<String, Object> ev = new LinkedHashMap<>();
             ev.put("err", String.valueOf(e));
             trace.event("cortex_schedule_update_err", ev);
+            return err(String.valueOf(e));
+        }
+    }
+
+    /**
+     * Notification trigger module API.
+     *
+     * Payload JSON:
+     * {
+     *   "action": "status|list_rules|upsert_rule|remove_rule|list_logs|control",
+     *   "rule": { ... },         // required for upsert_rule
+     *   "rule_id": "id",         // required for remove_rule
+     *   "limit": 100,            // optional for list_logs
+     *   "mode": "start|stop|reload|status" // for control
+     * }
+     */
+    public byte[] handleCortexNotify(byte[] payload) {
+        try {
+            String s = payload != null && payload.length > 0
+                    ? new String(payload, StandardCharsets.UTF_8)
+                    : "{}";
+            Map<String, Object> req = Json.parseObject(s);
+            String action = stringOrEmpty(req.get("action")).toLowerCase();
+            if (action.isEmpty()) {
+                action = "status";
+            }
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            if ("status".equals(action)) {
+                out.putAll(notificationTriggerModule.getStatus());
+                out.put("ok", true);
+            } else if ("list_rules".equals(action)) {
+                out.put("ok", true);
+                out.put("rules", notificationTriggerModule.listRules());
+            } else if ("upsert_rule".equals(action)) {
+                Object ruleObj = req.get("rule");
+                if (!(ruleObj instanceof Map)) {
+                    return err("rule is required");
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> rule = (Map<String, Object>) ruleObj;
+                out.putAll(notificationTriggerModule.upsertRule(rule));
+            } else if ("remove_rule".equals(action)) {
+                String ruleId = stringOrEmpty(req.get("rule_id"));
+                out.putAll(notificationTriggerModule.removeRule(ruleId));
+            } else if ("list_logs".equals(action)) {
+                int limit = toInt(req.get("limit"), 100);
+                out.put("ok", true);
+                out.put("logs", notificationTriggerModule.listLogs(limit));
+            } else if ("control".equals(action)) {
+                String mode = stringOrEmpty(req.get("mode"));
+                out.putAll(notificationTriggerModule.control(mode));
+            } else {
+                return err("unsupported notify action: " + action);
+            }
+
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("action", action);
+            ev.put("ok", toBool(out.get("ok"), false));
+            trace.event("cortex_notify_api", ev);
+            return ok(Json.stringify(out));
+        } catch (Exception e) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("err", String.valueOf(e));
+            trace.event("cortex_notify_api_err", ev);
             return err(String.valueOf(e));
         }
     }

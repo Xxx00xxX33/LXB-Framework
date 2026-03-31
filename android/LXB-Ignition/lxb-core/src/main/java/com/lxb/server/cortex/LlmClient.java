@@ -19,11 +19,31 @@ import java.util.Map;
 public class LlmClient {
 
     public String chatOnce(LlmConfig config, String systemPrompt, String userMessage, byte[] imagePng) throws Exception {
+        return chatOnce(config, systemPrompt, userMessage, imagePng, 10000, 60000);
+    }
+
+    public String chatOnce(
+            LlmConfig config,
+            String systemPrompt,
+            String userMessage,
+            byte[] imagePng,
+            int connectTimeoutMs,
+            int readTimeoutMs
+    ) throws Exception {
+        int normalizedConnectTimeout = normalizeTimeout(connectTimeoutMs, 10000);
+        int normalizedReadTimeout = normalizeTimeout(readTimeoutMs, 60000);
         final int maxAttempts = 3;
         Exception last = null;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                return chatOnceSingleAttempt(config, systemPrompt, userMessage, imagePng);
+                return chatOnceSingleAttempt(
+                        config,
+                        systemPrompt,
+                        userMessage,
+                        imagePng,
+                        normalizedConnectTimeout,
+                        normalizedReadTimeout
+                );
             } catch (Exception e) {
                 last = e;
                 if (attempt >= maxAttempts || !shouldRetry(e)) {
@@ -38,15 +58,22 @@ public class LlmClient {
         throw new IllegalStateException("LLM call failed with unknown error");
     }
 
-    private String chatOnceSingleAttempt(LlmConfig config, String systemPrompt, String userMessage, byte[] imagePng) throws Exception {
+    private String chatOnceSingleAttempt(
+            LlmConfig config,
+            String systemPrompt,
+            String userMessage,
+            byte[] imagePng,
+            int connectTimeoutMs,
+            int readTimeoutMs
+    ) throws Exception {
         HttpURLConnection conn = null;
         try {
             String endpoint = buildEndpointUrl(config.apiBaseUrl);
 
             URL url = new URL(endpoint);
             conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(60000);
+            conn.setConnectTimeout(connectTimeoutMs);
+            conn.setReadTimeout(readTimeoutMs);
             conn.setDoOutput(true);
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/json");
@@ -190,6 +217,13 @@ public class LlmClient {
             return outText;
         }
         return "";
+    }
+
+    private static int normalizeTimeout(int timeoutMs, int defVal) {
+        if (timeoutMs <= 0) return defVal;
+        if (timeoutMs < 500) return 500;
+        if (timeoutMs > 180000) return 180000;
+        return timeoutMs;
     }
 
     @SuppressWarnings("unchecked")
