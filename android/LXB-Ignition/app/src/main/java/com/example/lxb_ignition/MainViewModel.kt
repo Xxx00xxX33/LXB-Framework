@@ -620,9 +620,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshTaskListOnDevice() {
+    fun refreshTaskListOnDevice(silent: Boolean = false) {
         val port = currentLxbPortOrNull() ?: run {
-            appendSystemMessage("Invalid lxb-core port, cannot refresh task list.")
+            if (!silent) {
+                appendSystemMessage("Invalid lxb-core port, cannot refresh task list.")
+            }
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -644,8 +646,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.Main) {
                 _taskList.value = result.second
                 runtimeController.syncFromTaskList(result.second)
-                appendLog("[FSM] ${result.first}")
-                appendSystemMessage(result.first)
+                if (!silent) {
+                    appendLog("[FSM] ${result.first}")
+                    appendSystemMessage(result.first)
+                }
             }
         }
     }

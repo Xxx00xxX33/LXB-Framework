@@ -80,6 +80,7 @@ import com.example.lxb_ignition.model.TaskRuntimeUiStatus
 import com.example.lxb_ignition.model.WirelessBootstrapStatus
 import com.example.lxb_ignition.ui.theme.LXBIgnitionTheme
 import com.lxb.server.cortex.LlmClient
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -623,6 +624,14 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         viewModel.refreshScheduleListOnDevice()
         viewModel.refreshNotifyRuleListOnDevice()
         viewModel.refreshTaskListOnDevice()
+    }
+
+    LaunchedEffect(page) {
+        if (page != pageHome && page != pageRecentRuns) return@LaunchedEffect
+        while (true) {
+            viewModel.refreshTaskListOnDevice(silent = true)
+            delay(3000)
+        }
     }
 
     when (page) {
