@@ -68,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.lxb_ignition.model.CoreRuntimeStatus
+import com.example.lxb_ignition.model.NotificationTriggerRuleSummary
 import com.example.lxb_ignition.model.ScheduleSummary
 import com.example.lxb_ignition.model.TaskSummary
 import com.example.lxb_ignition.model.TaskRuntimeUiStatus
@@ -368,7 +369,52 @@ private val ZhMap = mapOf(
     "Refresh All" to "全部刷新",
     "No runs yet. Submit a task from Task Session or wait for schedules." to "暂无执行记录。可在任务会话中提交任务，或等待定时任务执行。",
     "Schedules" to "定时任务",
+    "Notification Triggers" to "通知触发任务",
     "Recent Runs" to "最近执行",
+    "Manage notification-triggered tasks and create new ones." to "管理通知触发任务并创建新规则。",
+    "No notification triggers yet." to "暂无通知触发规则。",
+    "Edit Notification Trigger" to "编辑通知触发任务",
+    "Create Notification Trigger" to "新建通知触发任务",
+    "Rule name" to "规则名称",
+    "Task description (what to do after trigger)" to "任务描述（触发后执行什么）",
+    "Rule settings" to "规则设置",
+    "Package match (optional)" to "Package 匹配（可选）",
+    "Title match (optional)" to "标题匹配（可选）",
+    "Body match (optional)" to "正文匹配（可选）",
+    "LLM condition (optional)" to "LLM 条件（可选）",
+    "Trigger name (optional)" to "规则名称（可选）",
+    "Enable rule" to "启用规则",
+    "Priority (high first)" to "优先级（值越高越先匹配）",
+    "Package mode" to "包名匹配模式",
+    "Any package" to "任意包名",
+    "Allow list" to "仅允许列表包名",
+    "Block list" to "排除列表包名",
+    "Package list (comma/newline separated)" to "包名列表（逗号或换行分隔）",
+    "Text match mode" to "文本匹配模式",
+    "Contains" to "包含",
+    "Regex" to "正则",
+    "Title pattern (optional)" to "标题匹配（可选）",
+    "Body pattern (optional)" to "正文匹配（可选）",
+    "Enable LLM condition" to "启用 LLM 条件判断",
+    "LLM condition" to "LLM 条件",
+    "Yes token" to "Yes 标记",
+    "No token" to "No 标记",
+    "LLM timeout ms" to "LLM 超时（毫秒）",
+    "Enable task rewrite" to "启用任务重写",
+    "Rewrite instruction / fallback task" to "重写指令 / 回退任务描述",
+    "Rewrite timeout ms" to "重写超时（毫秒）",
+    "Rewrite fail policy" to "重写失败策略",
+    "Fallback to raw task" to "回退到原始任务",
+    "Skip trigger when rewrite fails" to "重写失败则跳过触发",
+    "Cooldown ms" to "冷却时间（毫秒）",
+    "Stop after matched" to "命中后停止继续匹配",
+    "Action package (optional)" to "任务目标包名（可选）",
+    "Action task (required if rewrite is empty)" to "任务描述（当重写为空时必填）",
+    "Action playbook (optional)" to "任务操作文档（可选）",
+    "Action use-map override" to "是否覆盖 Use-Map",
+    "Inherit global setting" to "继承全局设置",
+    "Force use map" to "强制使用地图",
+    "Force no map" to "强制不使用地图",
     "Back" to "返回",
     "New" to "新建",
     "Refresh" to "刷新",
@@ -513,6 +559,7 @@ private val ZhMap = mapOf(
 fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val tasks by viewModel.taskList.collectAsState()
     val schedules by viewModel.scheduleList.collectAsState()
+    val notifyRules by viewModel.notifyRuleList.collectAsState()
     val taskRuntime by viewModel.taskRuntimeUiStatus.collectAsState()
     val scheduleName by viewModel.scheduleName.collectAsState()
     val scheduleTask by viewModel.scheduleTask.collectAsState()
@@ -522,17 +569,49 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val schedulePackage by viewModel.schedulePackage.collectAsState()
     val schedulePlaybook by viewModel.schedulePlaybook.collectAsState()
     val scheduleRecordEnabled by viewModel.scheduleRecordEnabled.collectAsState()
+    val notifyName by viewModel.notifyName.collectAsState()
+    val notifyEnabled by viewModel.notifyEnabled.collectAsState()
+    val notifyPriority by viewModel.notifyPriority.collectAsState()
+    val notifyPackageMode by viewModel.notifyPackageMode.collectAsState()
+    val notifyPackageListRaw by viewModel.notifyPackageListRaw.collectAsState()
+    val notifyTextMode by viewModel.notifyTextMode.collectAsState()
+    val notifyTitlePattern by viewModel.notifyTitlePattern.collectAsState()
+    val notifyBodyPattern by viewModel.notifyBodyPattern.collectAsState()
+    val notifyLlmConditionEnabled by viewModel.notifyLlmConditionEnabled.collectAsState()
+    val notifyLlmCondition by viewModel.notifyLlmCondition.collectAsState()
+    val notifyLlmYesToken by viewModel.notifyLlmYesToken.collectAsState()
+    val notifyLlmNoToken by viewModel.notifyLlmNoToken.collectAsState()
+    val notifyLlmTimeoutMs by viewModel.notifyLlmTimeoutMs.collectAsState()
+    val notifyTaskRewriteEnabled by viewModel.notifyTaskRewriteEnabled.collectAsState()
+    val notifyTaskRewriteInstruction by viewModel.notifyTaskRewriteInstruction.collectAsState()
+    val notifyTaskRewriteTimeoutMs by viewModel.notifyTaskRewriteTimeoutMs.collectAsState()
+    val notifyTaskRewriteFailPolicy by viewModel.notifyTaskRewriteFailPolicy.collectAsState()
+    val notifyCooldownMs by viewModel.notifyCooldownMs.collectAsState()
+    val notifyStopAfterMatched by viewModel.notifyStopAfterMatched.collectAsState()
+    val notifyActionUserTask by viewModel.notifyActionUserTask.collectAsState()
+    val notifyActionPackage by viewModel.notifyActionPackage.collectAsState()
+    val notifyActionUserPlaybook by viewModel.notifyActionUserPlaybook.collectAsState()
+    val notifyActionUseMapMode by viewModel.notifyActionUseMapMode.collectAsState()
     var page by rememberSaveable { mutableIntStateOf(0) }
     var editingScheduleId by rememberSaveable { mutableStateOf("") }
+    var editingNotifyRuleId by rememberSaveable { mutableStateOf("") }
     var selectedTask by remember { mutableStateOf<TaskSummary?>(null) }
+
+    val pageHome = 0
+    val pageScheduleList = 1
+    val pageNotifyRuleList = 2
+    val pageRecentRuns = 3
+    val pageScheduleForm = 4
+    val pageNotifyRuleForm = 5
 
     LaunchedEffect(Unit) {
         viewModel.refreshScheduleListOnDevice()
+        viewModel.refreshNotifyRuleListOnDevice()
         viewModel.refreshTaskListOnDevice()
     }
 
     when (page) {
-        0 -> {
+        pageHome -> {
             Column(
                 modifier = modifier
                     .fillMaxSize()
@@ -548,6 +627,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     OutlinedButton(
                         onClick = {
                             viewModel.refreshScheduleListOnDevice()
+                            viewModel.refreshNotifyRuleListOnDevice()
                             viewModel.refreshTaskListOnDevice()
                         },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -566,7 +646,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    onClick = { page = 1 }
+                    onClick = { page = pageScheduleList }
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
@@ -584,7 +664,25 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    onClick = { page = 2 }
+                    onClick = { page = pageNotifyRuleList }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(tr("Notification Triggers"), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = "${tr("Manage notification-triggered tasks and create new ones.")} (${notifyRules.size})",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                        )
+                    }
+                }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    onClick = { page = pageRecentRuns }
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
@@ -601,7 +699,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             }
         }
 
-        1 -> {
+        pageScheduleList -> {
             val scheduleListState = rememberLazyListState()
             Column(
                 modifier = modifier
@@ -614,7 +712,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { page = 0 },
+                        onClick = { page = pageHome },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
                     ) {
@@ -631,7 +729,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         onClick = {
                             editingScheduleId = ""
                             viewModel.resetScheduleForm()
-                            page = 3
+                            page = pageScheduleForm
                         },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
@@ -678,7 +776,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                                     onEdit = {
                                         editingScheduleId = schedule.scheduleId
                                         viewModel.loadScheduleForm(schedule)
-                                        page = 3
+                                        page = pageScheduleForm
                                     },
                                     onDelete = { viewModel.removeScheduleOnDevice(schedule.scheduleId) }
                                 )
@@ -689,7 +787,95 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             }
         }
 
-        2 -> {
+        pageNotifyRuleList -> {
+            val notifyListState = rememberLazyListState()
+            Column(
+                modifier = modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { page = pageHome },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text(tr("Back"), fontSize = 12.sp)
+                    }
+                    Text(
+                        text = tr("Notification Triggers"),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(top = 6.dp)
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            editingNotifyRuleId = ""
+                            viewModel.resetNotifyRuleForm()
+                            page = pageNotifyRuleForm
+                        },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text(tr("New"), fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { viewModel.refreshNotifyRuleListOnDevice() },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text(tr("Refresh"), fontSize = 12.sp)
+                    }
+                }
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    if (notifyRules.isEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = tr("No notification triggers yet."),
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            state = notifyListState,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(notifyRules, key = { it.id }) { rule ->
+                                NotificationRuleRow(
+                                    rule = rule,
+                                    onEdit = {
+                                        editingNotifyRuleId = rule.id
+                                        viewModel.loadNotifyRuleForm(rule)
+                                        page = pageNotifyRuleForm
+                                    },
+                                    onDelete = { viewModel.removeNotifyRuleOnDevice(rule.id) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        pageRecentRuns -> {
             val taskListState = rememberLazyListState()
             Column(
                 modifier = modifier
@@ -702,7 +888,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { page = 0 },
+                        onClick = { page = pageHome },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
                     ) {
@@ -758,7 +944,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             }
         }
 
-        else -> {
+        pageScheduleForm -> {
             val context = LocalContext.current
             val selectedRunAt = scheduleStartAtMs.toLongOrNull()?.takeIf { it > 0L }
                 ?: (System.currentTimeMillis() + 5 * 60_000L)
@@ -777,7 +963,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 ) {
                     OutlinedButton(
                         onClick = {
-                            page = 1
+                            page = pageScheduleList
                             editingScheduleId = ""
                         },
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
@@ -969,7 +1155,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                                     } else {
                                         viewModel.addScheduleOnDevice()
                                     }
-                                    page = 1
+                                    page = pageScheduleList
                                     editingScheduleId = ""
                                 },
                                 modifier = Modifier.weight(1f)
@@ -978,7 +1164,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             }
                             OutlinedButton(
                                 onClick = {
-                                    page = 1
+                                    page = pageScheduleList
                                     editingScheduleId = ""
                                 },
                                 modifier = Modifier.weight(1f)
@@ -1007,6 +1193,149 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         showTimeWheel = false
                     }
                 )
+            }
+        }
+
+        pageNotifyRuleForm -> {
+            val isEditing = editingNotifyRuleId.isNotEmpty()
+            Column(
+                modifier = modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            page = pageNotifyRuleList
+                            editingNotifyRuleId = ""
+                        },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text(tr("Back"), fontSize = 12.sp)
+                    }
+                    Text(
+                        text = tr(if (isEditing) "Edit Notification Trigger" else "Create Notification Trigger"),
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(top = 6.dp)
+                    )
+                }
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = notifyName,
+                            onValueChange = { viewModel.notifyName.value = it },
+                            label = { Text(tr("Rule name")) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = notifyActionUserTask,
+                            onValueChange = { viewModel.notifyActionUserTask.value = it },
+                            label = { Text(tr("Task description (what to do after trigger)")) },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 4
+                        )
+                        Text(
+                            text = tr("Rule settings"),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = tr("Enable rule"),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Switch(
+                                checked = notifyEnabled,
+                                onCheckedChange = { viewModel.notifyEnabled.value = it }
+                            )
+                        }
+                        OutlinedTextField(
+                            value = notifyPackageListRaw,
+                            onValueChange = { viewModel.notifyPackageListRaw.value = it },
+                            label = { Text(tr("Package match (optional)")) },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 3
+                        )
+                        OutlinedTextField(
+                            value = notifyTitlePattern,
+                            onValueChange = { viewModel.notifyTitlePattern.value = it },
+                            label = { Text(tr("Title match (optional)")) },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 2
+                        )
+                        OutlinedTextField(
+                            value = notifyBodyPattern,
+                            onValueChange = { viewModel.notifyBodyPattern.value = it },
+                            label = { Text(tr("Body match (optional)")) },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 4
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = tr("Enable LLM condition"),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Switch(
+                                checked = notifyLlmConditionEnabled,
+                                onCheckedChange = { viewModel.notifyLlmConditionEnabled.value = it }
+                            )
+                        }
+                        if (notifyLlmConditionEnabled) {
+                            OutlinedTextField(
+                                value = notifyLlmCondition,
+                                onValueChange = { viewModel.notifyLlmCondition.value = it },
+                                label = { Text(tr("LLM condition (optional)")) },
+                                modifier = Modifier.fillMaxWidth(),
+                                maxLines = 4
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    viewModel.upsertNotifyRuleOnDevice(editingNotifyRuleId)
+                                    page = pageNotifyRuleList
+                                    editingNotifyRuleId = ""
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(tr(if (isEditing) "Save" else "Submit"))
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    page = pageNotifyRuleList
+                                    editingNotifyRuleId = ""
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(tr("Cancel"))
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1110,6 +1439,61 @@ fun ScheduleRow(
             ) {
                 Text(
                     text = "id=${schedule.scheduleId.take(8)}...",
+                    fontSize = 10.sp,
+                    color = scheme.onSurface.copy(alpha = 0.6f)
+                )
+                OutlinedButton(
+                    onClick = onDelete,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.height(30.dp)
+                ) {
+                    Text(tr("Delete"), fontSize = 11.sp, color = scheme.error)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NotificationRuleRow(
+    rule: NotificationTriggerRuleSummary,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = scheme.surfaceVariant),
+        onClick = onEdit
+    ) {
+        Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val title = when {
+                rule.name.isNotBlank() -> rule.name
+                rule.actionUserTask.isNotBlank() -> rule.actionUserTask
+                else -> "(no task)"
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = "enabled=${rule.enabled}, priority=${rule.priority}, package_mode=${rule.packageMode}, text_mode=${rule.textMode}",
+                fontSize = 11.sp,
+                color = scheme.onSurface.copy(alpha = 0.75f)
+            )
+            if (rule.packageList.isNotEmpty()) {
+                Text(
+                    text = "package_list=${rule.packageList.joinToString(", ").take(100)}",
+                    fontSize = 11.sp,
+                    color = scheme.onSurface.copy(alpha = 0.75f)
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "id=${rule.id.take(8)}...",
                     fontSize = 10.sp,
                     color = scheme.onSurface.copy(alpha = 0.6f)
                 )

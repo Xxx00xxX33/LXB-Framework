@@ -18,6 +18,7 @@ import com.example.lxb_ignition.core.MapOperationsController
 import com.example.lxb_ignition.core.TaskRuntimeController
 import com.example.lxb_ignition.map.MapSyncManager
 import com.example.lxb_ignition.model.CoreRuntimeStatus
+import com.example.lxb_ignition.model.NotificationTriggerRuleSummary
 import com.example.lxb_ignition.model.ScheduleSummary
 import com.example.lxb_ignition.model.TaskSummary
 import com.example.lxb_ignition.model.TaskRuntimeUiStatus
@@ -83,6 +84,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val TASK_DND_MODE_SKIP = "skip"
         const val TASK_DND_MODE_OFF = "off"
         const val TASK_DND_MODE_NONE = "none"
+        const val NOTIFY_ACTION_USE_MAP_INHERIT = "inherit"
+        const val NOTIFY_ACTION_USE_MAP_TRUE = "true"
+        const val NOTIFY_ACTION_USE_MAP_FALSE = "false"
 
         private fun normalizePortString(raw: String?): String {
             val p = raw?.trim()?.toIntOrNull() ?: return DEFAULT_LXB_PORT
@@ -120,6 +124,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 TASK_DND_MODE_OFF -> TASK_DND_MODE_OFF
                 TASK_DND_MODE_NONE -> TASK_DND_MODE_NONE
                 else -> TASK_DND_MODE_NONE
+            }
+        }
+
+        private fun normalizeNotifyActionUseMap(raw: String?): String {
+            return when (raw?.trim()?.lowercase()) {
+                NOTIFY_ACTION_USE_MAP_TRUE -> NOTIFY_ACTION_USE_MAP_TRUE
+                NOTIFY_ACTION_USE_MAP_FALSE -> NOTIFY_ACTION_USE_MAP_FALSE
+                else -> NOTIFY_ACTION_USE_MAP_INHERIT
             }
         }
     }
@@ -217,6 +229,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _scheduleList = MutableStateFlow<List<ScheduleSummary>>(emptyList())
     val scheduleList: StateFlow<List<ScheduleSummary>> = _scheduleList.asStateFlow()
+    private val _notifyRuleList = MutableStateFlow<List<NotificationTriggerRuleSummary>>(emptyList())
+    val notifyRuleList: StateFlow<List<NotificationTriggerRuleSummary>> = _notifyRuleList.asStateFlow()
 
     // Tasks tab: schedule form
     val scheduleName = MutableStateFlow("")
@@ -227,6 +241,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val schedulePackage = MutableStateFlow("")
     val schedulePlaybook = MutableStateFlow("")
     val scheduleRecordEnabled = MutableStateFlow(false)
+
+    // Tasks tab: notification trigger form
+    val notifyRuleId = MutableStateFlow("")
+    val notifyName = MutableStateFlow("")
+    val notifyEnabled = MutableStateFlow(true)
+    val notifyPriority = MutableStateFlow("100")
+    val notifyPackageMode = MutableStateFlow("any")
+    val notifyPackageListRaw = MutableStateFlow("")
+    val notifyTextMode = MutableStateFlow("contains")
+    val notifyTitlePattern = MutableStateFlow("")
+    val notifyBodyPattern = MutableStateFlow("")
+    val notifyLlmConditionEnabled = MutableStateFlow(false)
+    val notifyLlmCondition = MutableStateFlow("")
+    val notifyLlmYesToken = MutableStateFlow("yes")
+    val notifyLlmNoToken = MutableStateFlow("no")
+    val notifyLlmTimeoutMs = MutableStateFlow("3000")
+    val notifyTaskRewriteEnabled = MutableStateFlow(false)
+    val notifyTaskRewriteInstruction = MutableStateFlow("")
+    val notifyTaskRewriteTimeoutMs = MutableStateFlow("4000")
+    val notifyTaskRewriteFailPolicy = MutableStateFlow("fallback_raw_task")
+    val notifyCooldownMs = MutableStateFlow("60000")
+    val notifyStopAfterMatched = MutableStateFlow(true)
+    val notifyActionType = MutableStateFlow("run_task")
+    val notifyActionUserTask = MutableStateFlow("")
+    val notifyActionPackage = MutableStateFlow("")
+    val notifyActionUserPlaybook = MutableStateFlow("")
+    val notifyActionUseMapMode = MutableStateFlow(NOTIFY_ACTION_USE_MAP_INHERIT)
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -636,6 +677,250 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 appendLog("[SCHEDULE] ${result.first}")
                 appendSystemMessage(result.first)
             }
+        }
+    }
+
+    fun refreshNotifyRuleListOnDevice() {
+        val port = currentLxbPortOrNull() ?: run {
+            appendSystemMessage("Invalid lxb-core port, cannot refresh notify rule list.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                coreClientGateway.withClient(port = port) { client ->
+                    val payload = org.json.JSONObject()
+                        .put("action", "list_rules")
+                        .toString()
+                        .toByteArray(Charsets.UTF_8)
+                    val resp = client.sendCommand(
+                        CommandIds.CMD_CORTEX_NOTIFY,
+                        payload,
+                        timeoutMs = 5_000
+                    )
+                    CoreApiParser.parseNotifyRuleList(resp)
+                }
+            }.getOrElse { e ->
+                Pair(
+                    "Notify rule list query failed: ${e.message}",
+                    emptyList<NotificationTriggerRuleSummary>()
+                )
+            }
+
+            withContext(Dispatchers.Main) {
+                _notifyRuleList.value = result.second
+                appendLog("[NOTIFY] ${result.first}")
+                appendSystemMessage(result.first)
+            }
+        }
+    }
+
+    fun upsertNotifyRuleOnDevice(editingRuleId: String = "") {
+        val port = currentLxbPortOrNull() ?: run {
+            appendSystemMessage("Invalid lxb-core port, cannot upsert notify rule.")
+            return
+        }
+        val rule = buildNotifyRulePayloadOrNull(editingRuleId) ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                coreClientGateway.withClient(port = port) { client ->
+                    val payload = org.json.JSONObject()
+                        .put("action", "upsert_rule")
+                        .put("rule", rule)
+                        .toString()
+                        .toByteArray(Charsets.UTF_8)
+                    val resp = client.sendCommand(
+                        CommandIds.CMD_CORTEX_NOTIFY,
+                        payload,
+                        timeoutMs = 6_000
+                    )
+                    CoreApiParser.parseNotifyRuleUpsert(resp)
+                }
+            }.getOrElse { e -> Pair("Upsert notify rule failed: ${e.message}", "") }
+
+            withContext(Dispatchers.Main) {
+                appendLog("[NOTIFY] ${result.first}")
+                appendSystemMessage(result.first)
+                if (result.second.isNotBlank()) {
+                    notifyRuleId.value = result.second
+                }
+                if (result.first.startsWith("Notify rule added") || result.first.startsWith("Notify rule updated")) {
+                    refreshNotifyRuleListOnDevice()
+                }
+            }
+        }
+    }
+
+    fun removeNotifyRuleOnDevice(ruleId: String) {
+        val rid = ruleId.trim()
+        if (rid.isEmpty()) {
+            appendSystemMessage("rule_id is empty.")
+            return
+        }
+        val port = currentLxbPortOrNull() ?: run {
+            appendSystemMessage("Invalid lxb-core port, cannot remove notify rule.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                coreClientGateway.withClient(port = port) { client ->
+                    val payload = org.json.JSONObject()
+                        .put("action", "remove_rule")
+                        .put("rule_id", rid)
+                        .toString()
+                        .toByteArray(Charsets.UTF_8)
+                    val resp = client.sendCommand(
+                        CommandIds.CMD_CORTEX_NOTIFY,
+                        payload,
+                        timeoutMs = 4_000
+                    )
+                    CoreApiParser.parseNotifyRuleRemove(resp, rid)
+                }
+            }.getOrElse { e -> "Remove notify rule failed: ${e.message}" }
+
+            withContext(Dispatchers.Main) {
+                appendLog("[NOTIFY] $result")
+                appendSystemMessage(result)
+                refreshNotifyRuleListOnDevice()
+            }
+        }
+    }
+
+    fun loadNotifyRuleForm(rule: NotificationTriggerRuleSummary) {
+        notifyRuleId.value = rule.id
+        notifyName.value = rule.name
+        notifyEnabled.value = rule.enabled
+        notifyPriority.value = rule.priority.toString()
+        notifyPackageMode.value = normalizeNotifyPackageMode(rule.packageMode)
+        notifyPackageListRaw.value = rule.packageList.joinToString("\n")
+        notifyTextMode.value = normalizeNotifyTextMode(rule.textMode)
+        notifyTitlePattern.value = rule.titlePattern
+        notifyBodyPattern.value = rule.bodyPattern
+        notifyLlmConditionEnabled.value = rule.llmConditionEnabled
+        notifyLlmCondition.value = rule.llmCondition
+        notifyLlmYesToken.value = if (rule.llmYesToken.isNotBlank()) rule.llmYesToken else "yes"
+        notifyLlmNoToken.value = if (rule.llmNoToken.isNotBlank()) rule.llmNoToken else "no"
+        notifyLlmTimeoutMs.value = rule.llmTimeoutMs.toString()
+        notifyTaskRewriteEnabled.value = rule.taskRewriteEnabled
+        notifyTaskRewriteInstruction.value = rule.taskRewriteInstruction
+        notifyTaskRewriteTimeoutMs.value = rule.taskRewriteTimeoutMs.toString()
+        notifyTaskRewriteFailPolicy.value = normalizeNotifyRewriteFailPolicy(rule.taskRewriteFailPolicy)
+        notifyCooldownMs.value = rule.cooldownMs.toString()
+        notifyStopAfterMatched.value = rule.stopAfterMatched
+        notifyActionType.value = if (rule.actionType.isNotBlank()) rule.actionType else "run_task"
+        notifyActionUserTask.value = rule.actionUserTask
+        notifyActionPackage.value = rule.actionPackage
+        notifyActionUserPlaybook.value = rule.actionUserPlaybook
+        notifyActionUseMapMode.value = when (rule.actionUseMap) {
+            true -> NOTIFY_ACTION_USE_MAP_TRUE
+            false -> NOTIFY_ACTION_USE_MAP_FALSE
+            null -> NOTIFY_ACTION_USE_MAP_INHERIT
+        }
+    }
+
+    fun resetNotifyRuleForm() {
+        notifyRuleId.value = ""
+        notifyName.value = ""
+        notifyEnabled.value = true
+        notifyPriority.value = "100"
+        notifyPackageMode.value = "any"
+        notifyPackageListRaw.value = ""
+        notifyTextMode.value = "contains"
+        notifyTitlePattern.value = ""
+        notifyBodyPattern.value = ""
+        notifyLlmConditionEnabled.value = false
+        notifyLlmCondition.value = ""
+        notifyLlmYesToken.value = "yes"
+        notifyLlmNoToken.value = "no"
+        notifyLlmTimeoutMs.value = "3000"
+        notifyTaskRewriteEnabled.value = true
+        notifyTaskRewriteInstruction.value = ""
+        notifyTaskRewriteTimeoutMs.value = "4000"
+        notifyTaskRewriteFailPolicy.value = "fallback_raw_task"
+        notifyCooldownMs.value = "0"
+        notifyStopAfterMatched.value = true
+        notifyActionType.value = "run_task"
+        notifyActionUserTask.value = ""
+        notifyActionPackage.value = ""
+        notifyActionUserPlaybook.value = ""
+        notifyActionUseMapMode.value = NOTIFY_ACTION_USE_MAP_INHERIT
+    }
+
+    private fun buildNotifyRulePayloadOrNull(editingRuleId: String): org.json.JSONObject? {
+        val id = if (editingRuleId.isNotBlank()) editingRuleId.trim() else notifyRuleId.value.trim()
+        val actionTask = notifyActionUserTask.value.trim()
+        if (actionTask.isEmpty()) {
+            appendSystemMessage("Task description is empty.")
+            return null
+        }
+
+        val packageList = parseNotifyPackageList(notifyPackageListRaw.value)
+        val packageMode = if (packageList.isEmpty()) "any" else "allowlist"
+        val action = org.json.JSONObject()
+            .put("type", "run_task")
+            .put("user_task", actionTask)
+            .put("package", notifyActionPackage.value.trim())
+            .put("user_playbook", notifyActionUserPlaybook.value.trim())
+
+        when (normalizeNotifyActionUseMap(notifyActionUseMapMode.value)) {
+            NOTIFY_ACTION_USE_MAP_TRUE -> action.put("use_map", true)
+            NOTIFY_ACTION_USE_MAP_FALSE -> action.put("use_map", false)
+        }
+
+        val rule = org.json.JSONObject()
+            .put("name", notifyName.value.trim())
+            .put("enabled", notifyEnabled.value)
+            .put("priority", notifyPriority.value.trim().toIntOrNull() ?: 100)
+            .put("package_mode", packageMode)
+            .put("package_list", org.json.JSONArray(packageList))
+            .put("text_mode", "contains")
+            .put("title_pattern", notifyTitlePattern.value.trim())
+            .put("body_pattern", notifyBodyPattern.value.trim())
+            .put("llm_condition_enabled", notifyLlmConditionEnabled.value)
+            .put("llm_condition", notifyLlmCondition.value.trim())
+            .put("llm_yes_token", "yes")
+            .put("llm_no_token", "no")
+            .put("llm_timeout_ms", 3000L)
+            .put("task_rewrite_enabled", true)
+            .put("task_rewrite_instruction", "")
+            .put("task_rewrite_timeout_ms", 4000L)
+            .put("task_rewrite_fail_policy", "fallback_raw_task")
+            .put("cooldown_ms", 0L)
+            .put("stop_after_matched", true)
+            .put("action", action)
+        if (id.isNotBlank()) {
+            rule.put("id", id)
+        }
+        return rule
+    }
+
+    private fun parseNotifyPackageList(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return raw
+            .split(',', '\n', ';')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+    }
+
+    private fun normalizeNotifyPackageMode(raw: String?): String {
+        return when (raw?.trim()?.lowercase()) {
+            "allowlist" -> "allowlist"
+            "blocklist" -> "blocklist"
+            else -> "any"
+        }
+    }
+
+    private fun normalizeNotifyTextMode(raw: String?): String {
+        return when (raw?.trim()?.lowercase()) {
+            "regex" -> "regex"
+            else -> "contains"
+        }
+    }
+
+    private fun normalizeNotifyRewriteFailPolicy(raw: String?): String {
+        return when (raw?.trim()?.lowercase()) {
+            "skip" -> "skip"
+            else -> "fallback_raw_task"
         }
     }
 

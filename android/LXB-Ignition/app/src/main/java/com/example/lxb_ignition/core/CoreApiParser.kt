@@ -1,5 +1,6 @@
 package com.example.lxb_ignition.core
 
+import com.example.lxb_ignition.model.NotificationTriggerRuleSummary
 import com.example.lxb_ignition.model.ScheduleSummary
 import com.example.lxb_ignition.model.TaskSummary
 import org.json.JSONArray
@@ -144,6 +145,98 @@ object CoreApiParser {
         } else {
             "Schedule not found: $scheduleId"
         }
+    }
+
+    fun parseNotifyRuleList(payload: ByteArray): Pair<String, List<NotificationTriggerRuleSummary>> {
+        val text = payload.toString(Charsets.UTF_8)
+        val obj = runCatching { JSONObject(text) }.getOrNull()
+            ?: return Pair("Invalid notify rule list response: ${text.take(160)}", emptyList())
+        if (!obj.optBoolean("ok", false)) {
+            return Pair("Notify rule list query failed: ${text.take(160)}", emptyList())
+        }
+        val arr = obj.optJSONArray("rules") ?: JSONArray()
+        val dedup = linkedMapOf<String, NotificationTriggerRuleSummary>()
+        for (i in 0 until arr.length()) {
+            val r = arr.optJSONObject(i) ?: continue
+            val id = r.optString("id", "")
+            if (id.isBlank()) continue
+            val action = r.optJSONObject("action") ?: JSONObject()
+            val summary = NotificationTriggerRuleSummary(
+                id = id,
+                name = r.optString("name", ""),
+                enabled = r.optBoolean("enabled", true),
+                priority = r.optInt("priority", 100),
+                packageMode = r.optString("package_mode", "any"),
+                packageList = jsonArrayToStringList(r.optJSONArray("package_list")),
+                textMode = r.optString("text_mode", "contains"),
+                titlePattern = r.optString("title_pattern", ""),
+                bodyPattern = r.optString("body_pattern", ""),
+                llmConditionEnabled = r.optBoolean("llm_condition_enabled", false),
+                llmCondition = r.optString("llm_condition", ""),
+                llmYesToken = r.optString("llm_yes_token", "yes"),
+                llmNoToken = r.optString("llm_no_token", "no"),
+                llmTimeoutMs = r.optLong("llm_timeout_ms", 3000L),
+                taskRewriteEnabled = r.optBoolean("task_rewrite_enabled", false),
+                taskRewriteInstruction = r.optString("task_rewrite_instruction", ""),
+                taskRewriteTimeoutMs = r.optLong("task_rewrite_timeout_ms", 4000L),
+                taskRewriteFailPolicy = r.optString("task_rewrite_fail_policy", "fallback_raw_task"),
+                cooldownMs = r.optLong("cooldown_ms", 60_000L),
+                stopAfterMatched = r.optBoolean("stop_after_matched", true),
+                actionType = action.optString("type", "run_task"),
+                actionUserTask = action.optString("user_task", ""),
+                actionPackage = action.optString("package", ""),
+                actionUserPlaybook = action.optString("user_playbook", ""),
+                actionUseMap = if (action.has("use_map")) action.optBoolean("use_map", true) else null
+            )
+            dedup[id] = summary
+        }
+        val items = dedup.values.sortedWith(
+            compareByDescending<NotificationTriggerRuleSummary> { it.priority }
+                .thenBy { it.id }
+        )
+        return Pair("Notify rules refreshed: ${items.size} items.", items)
+    }
+
+    fun parseNotifyRuleUpsert(payload: ByteArray): Pair<String, String> {
+        val text = payload.toString(Charsets.UTF_8)
+        val obj = runCatching { JSONObject(text) }.getOrNull()
+            ?: return Pair("Upsert notify rule failed: ${text.take(220)}", "")
+        if (!obj.optBoolean("ok", false)) {
+            return Pair("Upsert notify rule failed: ${text.take(220)}", "")
+        }
+        val updated = obj.optBoolean("updated", false)
+        val ruleObj = obj.optJSONObject("rule")
+        val id = ruleObj?.optString("id", "").orEmpty()
+        val msg = if (updated) {
+            if (id.isNotBlank()) "Notify rule updated: $id" else "Notify rule updated."
+        } else {
+            if (id.isNotBlank()) "Notify rule added: $id" else "Notify rule added."
+        }
+        return Pair(msg, id)
+    }
+
+    fun parseNotifyRuleRemove(payload: ByteArray, ruleId: String): String {
+        val text = payload.toString(Charsets.UTF_8)
+        val obj = runCatching { JSONObject(text) }.getOrNull()
+        return if (obj == null || !obj.optBoolean("ok", false)) {
+            "Remove notify rule failed: ${text.take(220)}"
+        } else if (obj.optBoolean("removed", false)) {
+            "Notify rule removed: $ruleId"
+        } else {
+            "Notify rule not found: $ruleId"
+        }
+    }
+
+    private fun jsonArrayToStringList(arr: JSONArray?): List<String> {
+        if (arr == null) return emptyList()
+        val out = ArrayList<String>(arr.length())
+        for (i in 0 until arr.length()) {
+            val s = arr.optString(i, "").trim()
+            if (s.isNotEmpty()) {
+                out.add(s)
+            }
+        }
+        return out
     }
 
     fun parseSystemControl(payload: ByteArray): SystemControlParsed {

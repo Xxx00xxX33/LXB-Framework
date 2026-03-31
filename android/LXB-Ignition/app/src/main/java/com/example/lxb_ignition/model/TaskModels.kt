@@ -35,3 +35,31 @@ data class ScheduleSummary(
     val createdAt: Long,
     val userPlaybook: String
 )
+
+data class NotificationTriggerRuleSummary(
+    val id: String,
+    val name: String,
+    val enabled: Boolean,
+    val priority: Int,
+    val packageMode: String,
+    val packageList: List<String>,
+    val textMode: String,
+    val titlePattern: String,
+    val bodyPattern: String,
+    val llmConditionEnabled: Boolean,
+    val llmCondition: String,
+    val llmYesToken: String,
+    val llmNoToken: String,
+    val llmTimeoutMs: Long,
+    val taskRewriteEnabled: Boolean,
+    val taskRewriteInstruction: String,
+    val taskRewriteTimeoutMs: Long,
+    val taskRewriteFailPolicy: String,
+    val cooldownMs: Long,
+    val stopAfterMatched: Boolean,
+    val actionType: String,
+    val actionUserTask: String,
+    val actionPackage: String,
+    val actionUserPlaybook: String,
+    val actionUseMap: Boolean?
+)
