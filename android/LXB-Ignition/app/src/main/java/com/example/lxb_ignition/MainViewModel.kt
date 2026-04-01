@@ -265,11 +265,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val notifyTaskRewriteTimeoutMs = MutableStateFlow("4000")
     val notifyTaskRewriteFailPolicy = MutableStateFlow("fallback_raw_task")
     val notifyCooldownMs = MutableStateFlow("60")
+    val notifyActiveTimeStart = MutableStateFlow("")
+    val notifyActiveTimeEnd = MutableStateFlow("")
     val notifyStopAfterMatched = MutableStateFlow(true)
     val notifyActionType = MutableStateFlow("run_task")
     val notifyActionUserTask = MutableStateFlow("")
     val notifyActionPackage = MutableStateFlow("")
     val notifyActionUserPlaybook = MutableStateFlow("")
+    val notifyActionRecordEnabled = MutableStateFlow(false)
     val notifyActionUseMapMode = MutableStateFlow(NOTIFY_ACTION_USE_MAP_INHERIT)
 
     private val httpClient = OkHttpClient.Builder()
@@ -840,11 +843,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         notifyTaskRewriteTimeoutMs.value = rule.taskRewriteTimeoutMs.toString()
         notifyTaskRewriteFailPolicy.value = normalizeNotifyRewriteFailPolicy(rule.taskRewriteFailPolicy)
         notifyCooldownMs.value = (rule.cooldownMs / 1000L).toString()
+        notifyActiveTimeStart.value = rule.activeTimeStart
+        notifyActiveTimeEnd.value = rule.activeTimeEnd
         notifyStopAfterMatched.value = rule.stopAfterMatched
         notifyActionType.value = if (rule.actionType.isNotBlank()) rule.actionType else "run_task"
         notifyActionUserTask.value = rule.actionUserTask
         notifyActionPackage.value = rule.actionPackage
         notifyActionUserPlaybook.value = rule.actionUserPlaybook
+        notifyActionRecordEnabled.value = rule.actionRecordEnabled
         notifyActionUseMapMode.value = when (rule.actionUseMap) {
             true -> NOTIFY_ACTION_USE_MAP_TRUE
             false -> NOTIFY_ACTION_USE_MAP_FALSE
@@ -872,11 +878,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         notifyTaskRewriteTimeoutMs.value = "60000"
         notifyTaskRewriteFailPolicy.value = "fallback_raw_task"
         notifyCooldownMs.value = "60"
+        notifyActiveTimeStart.value = ""
+        notifyActiveTimeEnd.value = ""
         notifyStopAfterMatched.value = true
         notifyActionType.value = "run_task"
         notifyActionUserTask.value = ""
         notifyActionPackage.value = ""
         notifyActionUserPlaybook.value = ""
+        notifyActionRecordEnabled.value = false
         notifyActionUseMapMode.value = NOTIFY_ACTION_USE_MAP_INHERIT
     }
 
@@ -901,6 +910,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .put("user_task", actionTask)
             .put("package", notifyActionPackage.value.trim())
             .put("user_playbook", notifyActionUserPlaybook.value.trim())
+            .put("record_enabled", notifyActionRecordEnabled.value)
 
         when (normalizeNotifyActionUseMap(notifyActionUseMapMode.value)) {
             NOTIFY_ACTION_USE_MAP_TRUE -> action.put("use_map", true)
@@ -926,6 +936,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .put("task_rewrite_timeout_ms", 60000L)
             .put("task_rewrite_fail_policy", "fallback_raw_task")
             .put("cooldown_ms", cooldownSec * 1000L)
+            .put("active_time_start", notifyActiveTimeStart.value.trim())
+            .put("active_time_end", notifyActiveTimeEnd.value.trim())
             .put("stop_after_matched", true)
             .put("action", action)
         if (id.isNotBlank()) {

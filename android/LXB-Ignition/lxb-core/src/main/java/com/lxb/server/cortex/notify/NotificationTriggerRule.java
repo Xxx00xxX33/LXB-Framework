@@ -13,13 +13,22 @@ public class NotificationTriggerRule {
         public final String userTask;
         public final String packageName;
         public final String userPlaybook;
+        public final boolean recordEnabled;
         public final Boolean useMapOverride;
 
-        public Action(String type, String userTask, String packageName, String userPlaybook, Boolean useMapOverride) {
+        public Action(
+                String type,
+                String userTask,
+                String packageName,
+                String userPlaybook,
+                boolean recordEnabled,
+                Boolean useMapOverride
+        ) {
             this.type = type != null ? type : "run_task";
             this.userTask = userTask != null ? userTask : "";
             this.packageName = packageName != null ? packageName : "";
             this.userPlaybook = userPlaybook != null ? userPlaybook : "";
+            this.recordEnabled = recordEnabled;
             this.useMapOverride = useMapOverride;
         }
     }
@@ -43,6 +52,8 @@ public class NotificationTriggerRule {
     public final long taskRewriteTimeoutMs;
     public final String taskRewriteFailPolicy;
     public final long cooldownMs;
+    public final String activeTimeStart;
+    public final String activeTimeEnd;
     public final boolean stopAfterMatched;
     public final Action action;
 
@@ -66,6 +77,8 @@ public class NotificationTriggerRule {
             long taskRewriteTimeoutMs,
             String taskRewriteFailPolicy,
             long cooldownMs,
+            String activeTimeStart,
+            String activeTimeEnd,
             boolean stopAfterMatched,
             Action action
     ) {
@@ -90,8 +103,10 @@ public class NotificationTriggerRule {
         this.taskRewriteTimeoutMs = clampTimeout(taskRewriteTimeoutMs, 60000L);
         this.taskRewriteFailPolicy = normalizeFailPolicy(taskRewriteFailPolicy);
         this.cooldownMs = Math.max(0L, cooldownMs);
+        this.activeTimeStart = normalizeTimeOfDay(activeTimeStart);
+        this.activeTimeEnd = normalizeTimeOfDay(activeTimeEnd);
         this.stopAfterMatched = stopAfterMatched;
-        this.action = action != null ? action : new Action("run_task", "", "", "", null);
+        this.action = action != null ? action : new Action("run_task", "", "", "", false, null);
     }
 
     @SuppressWarnings("unchecked")
@@ -124,12 +139,14 @@ public class NotificationTriggerRule {
         String taskRewriteFailPolicy = stringOrEmpty(map.get("task_rewrite_fail_policy"));
 
         long cooldownMs = toLong(map.get("cooldown_ms"), 60000L);
+        String activeTimeStart = stringOrEmpty(map.get("active_time_start"));
+        String activeTimeEnd = stringOrEmpty(map.get("active_time_end"));
         boolean stopAfterMatched = toBool(map.get("stop_after_matched"), true);
 
         Object actionObj = map.get("action");
         Action action = actionObj instanceof Map
                 ? parseAction((Map<String, Object>) actionObj)
-                : new Action("run_task", "", "", "", null);
+                : new Action("run_task", "", "", "", false, null);
         return new NotificationTriggerRule(
                 id,
                 name,
@@ -150,6 +167,8 @@ public class NotificationTriggerRule {
                 taskRewriteTimeoutMs,
                 taskRewriteFailPolicy,
                 cooldownMs,
+                activeTimeStart,
+                activeTimeEnd,
                 stopAfterMatched,
                 action
         );
@@ -158,18 +177,19 @@ public class NotificationTriggerRule {
     @SuppressWarnings("unchecked")
     private static Action parseAction(Map<String, Object> m) {
         if (m == null) {
-            return new Action("run_task", "", "", "", null);
+            return new Action("run_task", "", "", "", false, null);
         }
         String type = stringOrEmpty(m.get("type"));
         if (type.isEmpty()) type = "run_task";
         String userTask = stringOrEmpty(m.get("user_task"));
         String packageName = stringOrEmpty(m.get("package"));
         String userPlaybook = stringOrEmpty(m.get("user_playbook"));
+        boolean recordEnabled = toBool(m.get("record_enabled"), false);
         Boolean useMapOverride = null;
         if (m.containsKey("use_map")) {
             useMapOverride = Boolean.valueOf(toBool(m.get("use_map"), true));
         }
-        return new Action(type, userTask, packageName, userPlaybook, useMapOverride);
+        return new Action(type, userTask, packageName, userPlaybook, recordEnabled, useMapOverride);
     }
 
     private static String normalizePackageMode(String s) {
@@ -195,6 +215,26 @@ public class NotificationTriggerRule {
     private static String normalizeToken(String s, String defVal) {
         String v = normalizeLower(s);
         return v.isEmpty() ? defVal : v;
+    }
+
+    private static String normalizeTimeOfDay(String raw) {
+        String s = raw != null ? raw.trim() : "";
+        if (s.isEmpty()) return "";
+        int colon = s.indexOf(':');
+        if (colon <= 0 || colon >= s.length() - 1) return "";
+        String h = s.substring(0, colon).trim();
+        String m = s.substring(colon + 1).trim();
+        int hour;
+        int minute;
+        try {
+            hour = Integer.parseInt(h);
+            minute = Integer.parseInt(m);
+        } catch (Exception ignored) {
+            return "";
+        }
+        if (hour < 0 || hour > 23) return "";
+        if (minute < 0 || minute > 59) return "";
+        return String.format(Locale.ROOT, "%02d:%02d", hour, minute);
     }
 
     private static long clampTimeout(long timeoutMs, long defVal) {

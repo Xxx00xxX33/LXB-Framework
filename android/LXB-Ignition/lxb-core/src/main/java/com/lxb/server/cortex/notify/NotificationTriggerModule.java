@@ -12,6 +12,7 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -421,6 +422,7 @@ public class NotificationTriggerModule {
                         finalTask,
                         rule.action.packageName,
                         userPlaybook,
+                        Boolean.valueOf(rule.action.recordEnabled),
                         rule.action.useMapOverride
                 );
                 ruleLastTriggeredMs.put(rule.id, now);
@@ -449,6 +451,7 @@ public class NotificationTriggerModule {
             if (rule == null || !rule.enabled) continue;
             if (!matchPackage(rule, event.packageName)) continue;
             if (!matchText(rule, event)) continue;
+            if (!matchActiveTime(rule, nowMs)) continue;
             if (isCircuitOpen(rule.id, nowMs)) continue;
             if (isInCooldown(rule.id, nowMs, rule.cooldownMs)) continue;
             out.add(rule);
@@ -493,6 +496,48 @@ public class NotificationTriggerModule {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private boolean matchActiveTime(NotificationTriggerRule rule, long nowMs) {
+        if (rule == null) return true;
+        String start = rule.activeTimeStart != null ? rule.activeTimeStart.trim() : "";
+        String end = rule.activeTimeEnd != null ? rule.activeTimeEnd.trim() : "";
+        if (start.isEmpty() || end.isEmpty()) {
+            // If either side is empty, treat as "always active".
+            return true;
+        }
+        Integer startMinute = parseMinutesOfDay(start);
+        Integer endMinute = parseMinutesOfDay(end);
+        if (startMinute == null || endMinute == null) {
+            return true;
+        }
+        int nowMinute = currentMinutesOfDay(nowMs);
+        if (startMinute.intValue() <= endMinute.intValue()) {
+            return nowMinute >= startMinute.intValue() && nowMinute <= endMinute.intValue();
+        }
+        // Cross-midnight window, e.g. 23:00-06:00.
+        return nowMinute >= startMinute.intValue() || nowMinute <= endMinute.intValue();
+    }
+
+    private Integer parseMinutesOfDay(String hhmm) {
+        if (hhmm == null) return null;
+        String s = hhmm.trim();
+        int colon = s.indexOf(':');
+        if (colon <= 0 || colon >= s.length() - 1) return null;
+        try {
+            int hour = Integer.parseInt(s.substring(0, colon).trim());
+            int minute = Integer.parseInt(s.substring(colon + 1).trim());
+            if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+            return Integer.valueOf(hour * 60 + minute);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private int currentMinutesOfDay(long nowMs) {
+        Calendar c = Calendar.getInstance();
+        c.setTimeInMillis(nowMs);
+        return c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
     }
 
     private boolean isInCooldown(String ruleId, long now, long cooldownMs) {
@@ -833,12 +878,15 @@ public class NotificationTriggerModule {
         m.put("task_rewrite_timeout_ms", r.taskRewriteTimeoutMs);
         m.put("task_rewrite_fail_policy", r.taskRewriteFailPolicy);
         m.put("cooldown_ms", r.cooldownMs);
+        m.put("active_time_start", r.activeTimeStart);
+        m.put("active_time_end", r.activeTimeEnd);
         m.put("stop_after_matched", r.stopAfterMatched);
         Map<String, Object> action = new LinkedHashMap<String, Object>();
         action.put("type", r.action.type);
         action.put("user_task", r.action.userTask);
         action.put("package", r.action.packageName);
         action.put("user_playbook", r.action.userPlaybook);
+        action.put("record_enabled", r.action.recordEnabled);
         if (r.action.useMapOverride != null) {
             action.put("use_map", r.action.useMapOverride.booleanValue());
         }

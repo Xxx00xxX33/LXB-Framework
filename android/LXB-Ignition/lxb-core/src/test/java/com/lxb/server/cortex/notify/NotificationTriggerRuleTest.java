@@ -13,8 +13,9 @@ public class NotificationTriggerRuleTest {
     public void fromMap_shouldNormalizeCoreFields() {
         Map<String, Object> action = new LinkedHashMap<String, Object>();
         action.put("type", "run_task");
-        action.put("user_task", "帮我回复消息");
+        action.put("user_task", "reply in group");
         action.put("package", "com.tencent.mm");
+        action.put("record_enabled", true);
         action.put("use_map", true);
 
         Map<String, Object> row = new LinkedHashMap<String, Object>();
@@ -24,10 +25,12 @@ public class NotificationTriggerRuleTest {
         row.put("package_mode", "allowlist");
         row.put("package_list", Arrays.asList("com.tencent.mm"));
         row.put("text_mode", "contains");
-        row.put("title_pattern", "张三");
+        row.put("title_pattern", "group");
         row.put("llm_yes_token", "YES");
         row.put("llm_no_token", "NO");
         row.put("task_rewrite_fail_policy", "skip");
+        row.put("active_time_start", "8:5");
+        row.put("active_time_end", "19:30");
         row.put("action", action);
 
         NotificationTriggerRule rule = NotificationTriggerRule.fromMap(row, 1);
@@ -38,8 +41,11 @@ public class NotificationTriggerRuleTest {
         Assert.assertEquals("yes", rule.llmYesToken);
         Assert.assertEquals("no", rule.llmNoToken);
         Assert.assertEquals("skip", rule.taskRewriteFailPolicy);
-        Assert.assertEquals("帮我回复消息", rule.action.userTask);
+        Assert.assertEquals("08:05", rule.activeTimeStart);
+        Assert.assertEquals("19:30", rule.activeTimeEnd);
+        Assert.assertEquals("reply in group", rule.action.userTask);
         Assert.assertEquals("com.tencent.mm", rule.action.packageName);
+        Assert.assertTrue(rule.action.recordEnabled);
         Assert.assertEquals(Boolean.TRUE, rule.action.useMapOverride);
     }
 }

@@ -376,6 +376,7 @@ private val ZhMap = mapOf(
     "Select App" to "选择应用",
     "Search apps" to "搜索应用",
     "No app found." to "未找到应用。",
+    "Anytime" to "任意时段",
     "Package (select from local snapshot)" to "包名（从本地快照选择）",
     "Clear" to "清空",
     "No runs yet. Submit a task from Task Session or wait for schedules." to "暂无执行记录。可在任务会话中提交任务，或等待定时任务执行。",
@@ -393,6 +394,9 @@ private val ZhMap = mapOf(
     "Package match (optional)" to "Package 匹配（可选）",
     "Package match (select from local snapshot)" to "Package 匹配（从本地快照选择）",
     "Trigger interval (seconds)" to "触发间隔（秒）",
+    "Trigger time start (HH:mm, optional)" to "触发时段开始（HH:mm，可选）",
+    "Trigger time end (HH:mm, optional)" to "触发时段结束（HH:mm，可选）",
+    "Leave either field empty to allow triggering at any time." to "开始或结束留空时，表示任意时段都可触发。",
     "Title match (optional)" to "标题匹配（可选）",
     "Body match (optional)" to "正文匹配（可选）",
     "LLM condition (optional)" to "LLM 条件（可选）",
@@ -440,6 +444,7 @@ private val ZhMap = mapOf(
     "User playbook (optional)" to "用户操作文档（可选）",
     "Record task screen" to "录制任务屏幕",
     "Save task recording to Movies/lxb." to "将任务录屏保存到 Movies/lxb。",
+    "Record screen for triggered task" to "为通知触发任务录屏",
     "Save" to "保存",
     "Submit" to "提交",
     "Cancel" to "取消",
@@ -602,10 +607,13 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val notifyTaskRewriteTimeoutMs by viewModel.notifyTaskRewriteTimeoutMs.collectAsState()
     val notifyTaskRewriteFailPolicy by viewModel.notifyTaskRewriteFailPolicy.collectAsState()
     val notifyCooldownMs by viewModel.notifyCooldownMs.collectAsState()
+    val notifyActiveTimeStart by viewModel.notifyActiveTimeStart.collectAsState()
+    val notifyActiveTimeEnd by viewModel.notifyActiveTimeEnd.collectAsState()
     val notifyStopAfterMatched by viewModel.notifyStopAfterMatched.collectAsState()
     val notifyActionUserTask by viewModel.notifyActionUserTask.collectAsState()
     val notifyActionPackage by viewModel.notifyActionPackage.collectAsState()
     val notifyActionUserPlaybook by viewModel.notifyActionUserPlaybook.collectAsState()
+    val notifyActionRecordEnabled by viewModel.notifyActionRecordEnabled.collectAsState()
     val notifyActionUseMapMode by viewModel.notifyActionUseMapMode.collectAsState()
     var page by rememberSaveable { mutableIntStateOf(0) }
     var editingScheduleId by rememberSaveable { mutableStateOf("") }
@@ -1296,6 +1304,20 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier.fillMaxWidth(),
                             maxLines = 8
                         )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = tr("Record screen for triggered task"),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Switch(
+                                checked = notifyActionRecordEnabled,
+                                onCheckedChange = { viewModel.notifyActionRecordEnabled.value = it }
+                            )
+                        }
                         Text(
                             text = tr("Rule settings"),
                             fontSize = 12.sp,
@@ -1334,6 +1356,25 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                        OutlinedTextField(
+                            value = notifyActiveTimeStart,
+                            onValueChange = { viewModel.notifyActiveTimeStart.value = it },
+                            label = { Text(tr("Trigger time start (HH:mm, optional)")) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = notifyActiveTimeEnd,
+                            onValueChange = { viewModel.notifyActiveTimeEnd.value = it },
+                            label = { Text(tr("Trigger time end (HH:mm, optional)")) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Text(
+                            text = tr("Leave either field empty to allow triggering at any time."),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                         )
                         OutlinedTextField(
                             value = notifyTitlePattern,
@@ -1550,6 +1591,16 @@ fun NotificationRuleRow(
             )
             Text(
                 text = "enabled=${rule.enabled}, priority=${rule.priority}, package_mode=${rule.packageMode}, text_mode=${rule.textMode}",
+                fontSize = 11.sp,
+                color = scheme.onSurface.copy(alpha = 0.75f)
+            )
+            val timeWindow = if (rule.activeTimeStart.isNotBlank() && rule.activeTimeEnd.isNotBlank()) {
+                "${rule.activeTimeStart}-${rule.activeTimeEnd}"
+            } else {
+                tr("Anytime")
+            }
+            Text(
+                text = "cooldown=${rule.cooldownMs / 1000}s, time_window=$timeWindow, record=${if (rule.actionRecordEnabled) "on" else "off"}",
                 fontSize = 11.sp,
                 color = scheme.onSurface.copy(alpha = 0.75f)
             )

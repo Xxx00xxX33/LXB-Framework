@@ -217,11 +217,14 @@ object CoreApiParser {
                 taskRewriteTimeoutMs = r.optLong("task_rewrite_timeout_ms", 60000L),
                 taskRewriteFailPolicy = r.optString("task_rewrite_fail_policy", "fallback_raw_task"),
                 cooldownMs = r.optLong("cooldown_ms", 60_000L),
+                activeTimeStart = r.optString("active_time_start", ""),
+                activeTimeEnd = r.optString("active_time_end", ""),
                 stopAfterMatched = r.optBoolean("stop_after_matched", true),
                 actionType = action.optString("type", "run_task"),
                 actionUserTask = action.optString("user_task", ""),
                 actionPackage = action.optString("package", ""),
                 actionUserPlaybook = action.optString("user_playbook", ""),
+                actionRecordEnabled = action.optBoolean("record_enabled", false),
                 actionUseMap = if (action.has("use_map")) action.optBoolean("use_map", true) else null
             )
             dedup[id] = summary

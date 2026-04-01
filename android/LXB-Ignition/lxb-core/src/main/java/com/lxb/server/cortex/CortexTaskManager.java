@@ -186,12 +186,13 @@ public class CortexTaskManager {
      *
      * This path is intentionally lightweight:
      * - source is marked as "notify_trigger"
-     * - schedule/recording fields are disabled by default
+     * - schedule fields are disabled by default
      */
     public String submitNotificationTriggeredTask(
             String userTask,
             String packageName,
             String userPlaybook,
+            Boolean recordEnabled,
             Boolean useMapOverride
     ) {
         return submitTaskInternal(
@@ -204,7 +205,7 @@ public class CortexTaskManager {
                 "notify_trigger",
                 null,
                 userPlaybook,
-                Boolean.FALSE,
+                recordEnabled,
                 useMapOverride
         );
     }

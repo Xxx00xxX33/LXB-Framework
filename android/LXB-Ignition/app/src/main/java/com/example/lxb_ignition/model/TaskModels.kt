@@ -56,11 +56,14 @@ data class NotificationTriggerRuleSummary(
     val taskRewriteTimeoutMs: Long,
     val taskRewriteFailPolicy: String,
     val cooldownMs: Long,
+    val activeTimeStart: String,
+    val activeTimeEnd: String,
     val stopAfterMatched: Boolean,
     val actionType: String,
     val actionUserTask: String,
     val actionPackage: String,
     val actionUserPlaybook: String,
+    val actionRecordEnabled: Boolean,
     val actionUseMap: Boolean?
 )
 
