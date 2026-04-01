@@ -27,7 +27,7 @@ import java.util.regex.Pattern;
  *
  * Goal for now:
  * - Mirror the high-level FSM structure and state transitions:
- *   INIT -> APP_RESOLVE -> ROUTE_PLAN -> ROUTING -> VISION_ACT -> FINISH/FAIL
+ *   INIT -> APP_RESOLVE -> ROUTE_PLAN -> PREPARE_DEVICE -> ROUTING -> VISION_ACT -> FINISH/FAIL
  * - Provide a Context object and run() signature compatible with Python:
  *   status/state/package_name/target_page/route_result/command_log/llm_history/lessons/reason
  * - Gradually fill internal behavior with end-side engines (LLM planner, routing, VLM actions).
@@ -39,6 +39,7 @@ public class CortexFsmEngine {
         TASK_DECOMPOSE,
         APP_RESOLVE,
         ROUTE_PLAN,
+        PREPARE_DEVICE,
         ROUTING,
         VISION_ACT,
         FINISH,
@@ -52,6 +53,14 @@ public class CortexFsmEngine {
      */
     public interface CancellationChecker {
         boolean isCancelled();
+    }
+
+    /**
+     * Callback for task-level side effects that should run only after
+     * the device is confirmed unlocked.
+     */
+    public interface UnlockReadyCallback {
+        void onUnlockReady(String taskId, String source);
     }
 
     /**
@@ -124,6 +133,8 @@ public class CortexFsmEngine {
         public boolean useMap = true;
         public String mapSource = "stable";
         public boolean unlockedByFsm = false;
+        public UnlockReadyCallback unlockReadyCallback = null;
+        public boolean unlockReadyNotified = false;
 
         public Context(String taskId) {
             this.taskId = taskId;
@@ -291,7 +302,7 @@ public class CortexFsmEngine {
      * v2 structure:
      * - INIT: device/app discovery, coord probe.
      * - TASK_DECOMPOSE: call LLM to produce sub_tasks contracts (optional, best-effort).
-     * - For each sub_task (currently using existing APP_RESOLVE/ROUTE_PLAN/ROUTING/VISION_ACT):
+     * - For each sub_task (currently using existing APP_RESOLVE/ROUTE_PLAN/PREPARE_DEVICE/ROUTING/VISION_ACT):
      *   - APP_RESOLVE
      *   - ROUTE_PLAN
      *   - ROUTING
@@ -311,6 +322,36 @@ public class CortexFsmEngine {
             String taskIdOverride,
             CancellationChecker cancellationChecker
     ) {
+        return run(
+                userTask,
+                packageName,
+                mapPath,
+                startPage,
+                traceMode,
+                traceUdpPort,
+                userPlaybook,
+                taskMemoryHint,
+                useMapOverride,
+                taskIdOverride,
+                cancellationChecker,
+                null
+        );
+    }
+
+    public Map<String, Object> run(
+            String userTask,
+            String packageName,
+            String mapPath,
+            String startPage,
+            String traceMode,
+            Integer traceUdpPort,
+            String userPlaybook,
+            Map<String, Object> taskMemoryHint,
+            Boolean useMapOverride,
+            String taskIdOverride,
+            CancellationChecker cancellationChecker,
+            UnlockReadyCallback unlockReadyCallback
+    ) {
         String effectiveTaskId = (taskIdOverride != null && !taskIdOverride.isEmpty())
                 ? taskIdOverride
                 : UUID.randomUUID().toString();
@@ -320,6 +361,8 @@ public class CortexFsmEngine {
         ctx.mapPath = mapPath;
         ctx.startPage = startPage;
         ctx.userPlaybook = userPlaybook != null ? userPlaybook.trim() : "";
+        ctx.unlockReadyCallback = unlockReadyCallback;
+        ctx.unlockReadyNotified = false;
         if (ctx.userPlaybook.isEmpty() && taskMemoryHint != null && !taskMemoryHint.isEmpty()) {
             ctx.taskMemoryHint.putAll(taskMemoryHint);
         }
@@ -359,6 +402,7 @@ public class CortexFsmEngine {
                 }
                 if (state == State.INIT) {
                     state = runInitState(ctx);
+                    notifyUnlockReadyIfNeeded(ctx, "after_init");
                     continue;
                 }
                 if (state == State.TASK_DECOMPOSE) {
@@ -387,7 +431,7 @@ public class CortexFsmEngine {
             boolean anyMemoryFastPathUsed = false;
             boolean anyMemoryFastPathFallback = false;
 
-            // 3) Execute each sub_task using the existing APP_RESOLVE/ROUTE_PLAN/ROUTING/VISION_ACT pipeline.
+            // 3) Execute each sub_task using the existing APP_RESOLVE/ROUTE_PLAN/PREPARE_DEVICE/ROUTING/VISION_ACT pipeline.
             for (int idx = 0; idx < effectiveSubTasks.size(); idx++) {
                 SubTask st = effectiveSubTasks.get(idx);
 
@@ -440,6 +484,7 @@ public class CortexFsmEngine {
                 state = State.APP_RESOLVE;
                 int subTaskStepLimit = Math.max(40, resolveVisionMaxTurns(ctx) + 20);
                 for (int step = 0; step < subTaskStepLimit; step++) {
+                    notifyUnlockReadyIfNeeded(ctx, "sub_task_loop");
                     if (cancellationChecker != null && cancellationChecker.isCancelled()) {
                         ctx.error = "cancelled_by_user";
                         Map<String, Object> cancelEv = new LinkedHashMap<>();
@@ -454,6 +499,10 @@ public class CortexFsmEngine {
                     }
                     if (state == State.ROUTE_PLAN) {
                         state = runRoutePlanState(ctx);
+                        continue;
+                    }
+                    if (state == State.PREPARE_DEVICE) {
+                        state = runPrepareDeviceState(ctx);
                         continue;
                     }
                     if (state == State.ROUTING) {
@@ -1326,7 +1375,7 @@ public class CortexFsmEngine {
             noMapEv.put("use_map", false);
             noMapEv.put("map_source", ctx.mapSource);
             trace.event("fsm_route_plan_no_map", noMapEv);
-            return State.ROUTING;
+            return State.PREPARE_DEVICE;
         }
 
         File mapFile = mapManager.getMapFileForSource(pkg, ctx.mapSource);
@@ -1340,8 +1389,8 @@ public class CortexFsmEngine {
             noMapEv.put("map_source", ctx.mapSource);
             noMapEv.put("map_path", mapFile.getAbsolutePath());
             trace.event("fsm_route_plan_no_map", noMapEv);
-            // No map available: continue to ROUTING, then fall through to VISION_ACT.
-            return State.ROUTING;
+            // No map available: continue to PREPARE_DEVICE, then ROUTING falls through to VISION_ACT.
+            return State.PREPARE_DEVICE;
         }
 
         // 3) Map exists: load RouteMap and ask LLM to choose target_page.
@@ -1358,8 +1407,8 @@ public class CortexFsmEngine {
             fail.put("map_path", mapFile.getAbsolutePath());
             fail.put("reason", ctx.error);
             trace.event("fsm_route_plan_map_load_failed", fail);
-            // Keep pipeline consistent: ROUTING handles no-map mode.
-            return State.ROUTING;
+            // Keep pipeline consistent: PREPARE_DEVICE + ROUTING handle no-map mode.
+            return State.PREPARE_DEVICE;
         }
 
         ctx.mapPath = mapFile.getAbsolutePath();
@@ -1407,6 +1456,67 @@ public class CortexFsmEngine {
         }
 
         ctx.targetPage = targetPage;
+        return State.PREPARE_DEVICE;
+    }
+
+    private State runPrepareDeviceState(Context ctx) {
+        Map<String, Object> ev = new LinkedHashMap<>();
+        ev.put("task_id", ctx.taskId);
+        ev.put("state", State.PREPARE_DEVICE.name());
+        ev.put("selected_package", ctx.selectedPackage);
+        ev.put("target_page", ctx.targetPage);
+        ev.put("map_path", ctx.mapPath);
+        trace.event("fsm_state_enter", ev);
+
+        if (ctx.selectedPackage == null || ctx.selectedPackage.trim().isEmpty()) {
+            ctx.error = "prepare_device_no_package";
+            Map<String, Object> fail = new LinkedHashMap<>();
+            fail.put("task_id", ctx.taskId);
+            fail.put("reason", ctx.error);
+            trace.event("fsm_prepare_device_failed", fail);
+            return State.FAIL;
+        }
+
+        String pkg = ctx.selectedPackage.trim();
+        boolean launchOk = launchAppForRouting(ctx, pkg);
+
+        // Keep original event name for compatibility with existing traces/UI parsers.
+        Map<String, Object> launchEv = new LinkedHashMap<>();
+        launchEv.put("task_id", ctx.taskId);
+        launchEv.put("package", pkg);
+        launchEv.put("clear_task", true);
+        launchEv.put("result", launchOk ? "ok" : "fail");
+        trace.event("fsm_routing_launch_app", launchEv);
+
+        Map<String, Object> prepareLaunchEv = new LinkedHashMap<>();
+        prepareLaunchEv.put("task_id", ctx.taskId);
+        prepareLaunchEv.put("package", pkg);
+        prepareLaunchEv.put("result", launchOk ? "ok" : "fail");
+        trace.event("fsm_prepare_device_launch", prepareLaunchEv);
+
+        if (!launchOk) {
+            ctx.error = "prepare_device_launch_failed";
+            Map<String, Object> fail = new LinkedHashMap<>();
+            fail.put("task_id", ctx.taskId);
+            fail.put("package", pkg);
+            fail.put("reason", ctx.error);
+            trace.event("fsm_prepare_device_failed", fail);
+            return State.FAIL;
+        }
+
+        boolean hasMap = ctx.mapPath != null && !ctx.mapPath.trim().isEmpty();
+        Map<String, Object> uiEv = new LinkedHashMap<>();
+        uiEv.put("task_id", ctx.taskId);
+        uiEv.put("package", pkg);
+        uiEv.put("mode", hasMap ? "map" : "no_map");
+        uiEv.put("ui", captureRoutingUiFingerprint());
+        trace.event("fsm_routing_post_launch_ui", uiEv);
+
+        Map<String, Object> done = new LinkedHashMap<>();
+        done.put("task_id", ctx.taskId);
+        done.put("package", pkg);
+        done.put("result", "ok");
+        trace.event("fsm_prepare_device_done", done);
         return State.ROUTING;
     }
 
@@ -1497,36 +1607,11 @@ public class CortexFsmEngine {
         planEv.put("start_page_override", ctx.startPage != null && !ctx.startPage.trim().isEmpty());
         trace.event("fsm_routing_plan", planEv);
 
-        // 2) Launch app once for both map and no-map modes.
-        boolean launchOk = launchAppForRouting(ctx, pkg);
-        Map<String, Object> launchEv = new LinkedHashMap<>();
-        launchEv.put("task_id", ctx.taskId);
-        launchEv.put("package", pkg);
-        launchEv.put("clear_task", true);
-        launchEv.put("result", launchOk ? "ok" : "fail");
-        trace.event("fsm_routing_launch_app", launchEv);
-        if (!launchOk) {
-            ctx.error = "routing_launch_failed";
-            Map<String, Object> fail = new LinkedHashMap<>();
-            fail.put("task_id", ctx.taskId);
-            fail.put("package", pkg);
-            fail.put("reason", ctx.error);
-            trace.event("fsm_routing_failed", fail);
-            return State.FAIL;
-        }
-
-        Map<String, Object> uiEv = new LinkedHashMap<>();
-        uiEv.put("task_id", ctx.taskId);
-        uiEv.put("package", pkg);
-        uiEv.put("mode", hasMap ? "map" : "no_map");
-        uiEv.put("ui", captureRoutingUiFingerprint());
-        trace.event("fsm_routing_post_launch_ui", uiEv);
-
-        // No-map mode: nothing to tap, route_result just records launch.
+        // No-map mode: PREPARE_DEVICE already launched app; nothing to tap here.
         if (!hasMap || path == null || path.isEmpty()) {
             ctx.routeTrace.clear();
             ctx.routeResult.clear();
-            ctx.routeResult.put("ok", launchOk);
+            ctx.routeResult.put("ok", true);
             ctx.routeResult.put("mode", "no_map");
             ctx.routeResult.put("package", pkg);
             ctx.routeResult.put("steps", new ArrayList<Map<String, Object>>());
@@ -1545,7 +1630,7 @@ public class CortexFsmEngine {
         } catch (InterruptedException ignored) {
         }
 
-        // 3) Execute route steps with locator resolution and tap.
+        // Execute route steps with locator resolution and tap.
         LocatorResolver resolver = new LocatorResolver(perception, trace);
         List<Map<String, Object>> stepSummaries = new ArrayList<>();
         boolean allOk = true;
@@ -2382,6 +2467,7 @@ public class CortexFsmEngine {
         int beforeState = getScreenStateCode();
         boolean beforeLockHint = isLikelyLockscreenShown();
         if (beforeState == 1 && !beforeLockHint) {
+            notifyUnlockReadyIfNeeded(ctx, "route_precheck_already_unlocked");
             Map<String, Object> ev = new LinkedHashMap<>();
             ev.put("task_id", ctx.taskId);
             ev.put("package", packageName);
@@ -2469,6 +2555,7 @@ public class CortexFsmEngine {
 
             if (unlocked) {
                 ctx.unlockedByFsm = true;
+                notifyUnlockReadyIfNeeded(ctx, "route_unlock_ok");
                 Map<String, Object> okEv = new LinkedHashMap<>();
                 okEv.put("task_id", ctx.taskId);
                 okEv.put("package", packageName);
@@ -2514,6 +2601,38 @@ public class CortexFsmEngine {
         ev.put("has_unlock_pin", !ctx.unlockPin.isEmpty());
         trace.event("fsm_route_unlock", ev);
         return false;
+    }
+
+    private void notifyUnlockReadyIfNeeded(Context ctx, String source) {
+        if (ctx == null || ctx.unlockReadyNotified || ctx.unlockReadyCallback == null) {
+            return;
+        }
+        int screenState = getScreenStateCode();
+        boolean lockHint = isLikelyLockscreenShown();
+        if (screenState != 1 || lockHint) {
+            return;
+        }
+        try {
+            ctx.unlockReadyCallback.onUnlockReady(ctx.taskId, source != null ? source : "");
+            ctx.unlockReadyNotified = true;
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("task_id", ctx.taskId);
+            ev.put("source", source != null ? source : "");
+            ev.put("screen_state", screenState);
+            ev.put("lock_hint", lockHint);
+            ev.put("result", "callback_sent");
+            trace.event("fsm_unlock_ready_callback", ev);
+        } catch (Exception e) {
+            ctx.unlockReadyNotified = true;
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("task_id", ctx.taskId);
+            ev.put("source", source != null ? source : "");
+            ev.put("screen_state", screenState);
+            ev.put("lock_hint", lockHint);
+            ev.put("result", "callback_error");
+            ev.put("err", String.valueOf(e));
+            trace.event("fsm_unlock_ready_callback", ev);
+        }
     }
 
     private boolean tryInputUnlockPin(Context ctx, String pin) {

@@ -533,6 +533,32 @@ public class CortexTaskManager {
 
                 TaskSessionHooks hooks = applyTaskSessionStart(instance, req);
                 try {
+                    CortexFsmEngine.UnlockReadyCallback unlockReadyCallback = null;
+                    if (hooks.recordEnabled && hooks.recordPath != null && !hooks.recordPath.isEmpty()) {
+                        unlockReadyCallback = new CortexFsmEngine.UnlockReadyCallback() {
+                            @Override
+                            public void onUnlockReady(String taskId, String source) {
+                                if (hooks.recordStarted) {
+                                    return;
+                                }
+                                try {
+                                    Map<String, Object> recArgs = new LinkedHashMap<String, Object>();
+                                    recArgs.put("path", hooks.recordPath);
+                                    Map<String, Object> rec = fsmEngine.runSystemControl(
+                                            instance.taskId,
+                                            "screen_record_start",
+                                            recArgs
+                                    );
+                                    hooks.recordStarted = toBool(rec.get("ok"), false);
+                                    instance.recordStarted = hooks.recordStarted;
+                                } catch (Exception ignored) {
+                                    hooks.recordStarted = false;
+                                    instance.recordStarted = false;
+                                }
+                            }
+                        };
+                    }
+
                     Map<String, Object> out = fsmEngine.run(
                             req.userTask,
                             req.packageName,
@@ -544,7 +570,8 @@ public class CortexTaskManager {
                             req.taskMemoryHint,
                             req.useMapOverride,
                             instance.taskId,
-                            checker
+                            checker,
+                            unlockReadyCallback
                     );
                     instance.finishedAt = System.currentTimeMillis();
                     Object finalState = out.get("state");
@@ -622,16 +649,8 @@ public class CortexTaskManager {
         if (req.recordEnabled) {
             hooks.recordPath = buildRecordFilePath(instance.taskId, instance.startedAt);
             instance.recordFilePath = hooks.recordPath;
-            try {
-                Map<String, Object> recArgs = new LinkedHashMap<String, Object>();
-                recArgs.put("path", hooks.recordPath);
-                Map<String, Object> rec = fsmEngine.runSystemControl(instance.taskId, "screen_record_start", recArgs);
-                hooks.recordStarted = toBool(rec.get("ok"), false);
-                instance.recordStarted = hooks.recordStarted;
-            } catch (Exception ignored) {
-                hooks.recordStarted = false;
-                instance.recordStarted = false;
-            }
+            hooks.recordStarted = false;
+            instance.recordStarted = false;
         }
         return hooks;
     }
