@@ -108,6 +108,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Legacy key migration only (v0.4.0 and earlier).
         private const val KEY_MAP_DEBUG_LOCAL_OVERRIDE = "map_debug_local_override"
         private const val KEY_UI_LANG = "ui_lang"
+        private const val KEY_UI_LANG_MANUAL = "ui_lang_manual"
         private const val KEY_TOUCH_MODE = "touch_mode"
         private const val KEY_TASK_DND_MODE = "task_dnd_mode"
         private const val DEFAULT_MAP_REPO_RAW_BASE_URL = "https://raw.githubusercontent.com/wuwei-crg/LXB-MapRepo/main"
@@ -234,7 +235,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val coreConfigResult = MutableStateFlow("")
     val mapSyncResult = MutableStateFlow("")
     val appUpdateResult = MutableStateFlow("")
-    val uiLang = MutableStateFlow(normalizeUiLang(prefs.getString(KEY_UI_LANG, "en")))
+    private fun detectSystemUiLang(): String {
+        val config = getApplication<Application>().resources.configuration
+        val locale = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            config.locales[0]
+        } else {
+            @Suppress("DEPRECATION")
+            config.locale
+        } ?: Locale.getDefault()
+        return if (locale.language.equals("zh", ignoreCase = true)) "zh" else "en"
+    }
+
+    private fun loadInitialUiLang(): String {
+        val manual = prefs.getBoolean(KEY_UI_LANG_MANUAL, false)
+        return if (manual) {
+            normalizeUiLang(prefs.getString(KEY_UI_LANG, detectSystemUiLang()))
+        } else {
+            detectSystemUiLang()
+        }
+    }
+
+    val uiLang = MutableStateFlow(loadInitialUiLang())
     val touchMode = MutableStateFlow(normalizeTouchMode(prefs.getString(KEY_TOUCH_MODE, TOUCH_MODE_SHELL)))
     val taskDndMode = MutableStateFlow(normalizeTaskDndMode(prefs.getString(KEY_TASK_DND_MODE, TASK_DND_MODE_NONE)))
     private val _llmProfiles = MutableStateFlow<List<LlmProfile>>(emptyList())
@@ -1896,8 +1917,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setUiLang(lang: String) {
-        uiLang.value = normalizeUiLang(lang)
-        saveConfig()
+        val normalizedLang = normalizeUiLang(lang)
+        uiLang.value = normalizedLang
+        prefs.edit()
+            .putString(KEY_UI_LANG, normalizedLang)
+            .putBoolean(KEY_UI_LANG_MANUAL, true)
+            .apply()
     }
 
     private fun currentLxbPortOrNull(): Int? {

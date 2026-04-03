@@ -885,10 +885,28 @@ private val ZhMap = mapOf(
     "Anytime" to "任意时段",
     "Package (select from local snapshot)" to "包名（从本地快照选择）",
     "Clear" to "清空",
+    "Manage scheduled tasks and create new ones." to "管理定时任务并创建新任务。",
+    "View recent execution records." to "查看最近执行记录。",
     "No runs yet. Submit a task from Task Session or wait for schedules." to "暂无执行记录。可在任务会话中提交任务，或等待定时任务执行。",
     "Schedules" to "定时任务",
     "Notification Triggers" to "通知触发任务",
     "Recent Runs" to "最近执行",
+    "No schedules yet." to "暂无定时任务。",
+    "Edit Schedule" to "编辑定时任务",
+    "Create Schedule" to "新建定时任务",
+    "Run time" to "运行时间",
+    "Repeat" to "重复",
+    "Once" to "单次",
+    "Daily" to "每天",
+    "Weekly" to "每周",
+    "Mon" to "周一",
+    "Tue" to "周二",
+    "Wed" to "周三",
+    "Thu" to "周四",
+    "Fri" to "周五",
+    "Sat" to "周六",
+    "Sun" to "周日",
+    "Selected days" to "已选日期",
     "Manage notification-triggered tasks and create new ones." to "管理通知触发任务并创建新规则。",
     "No notification triggers yet." to "暂无通知触发规则。",
     "Edit Notification Trigger" to "编辑通知触发任务",
@@ -942,6 +960,35 @@ private val ZhMap = mapOf(
     "Back" to "返回",
     "New" to "新建",
     "Refresh" to "刷新",
+    "Task Details" to "任务详情",
+    "No task summary available yet." to "暂时没有任务摘要。",
+    "Task ID" to "任务 ID",
+    "Timestamp" to "时间",
+    "Task" to "任务",
+    "Reason" to "原因",
+    "Target page" to "目标页面",
+    "Source" to "来源",
+    "Schedule ID" to "定时任务 ID",
+    "Memory applied" to "已应用记忆",
+    "Record enabled" to "已开启录屏",
+    "Record file" to "录屏文件",
+    "Created at" to "创建时间",
+    "Finished at" to "结束时间",
+    "Next run" to "下次运行",
+    "Triggered count" to "触发次数",
+    "Record" to "录屏",
+    "Cooldown" to "冷却",
+    "Time window" to "生效时段",
+    "Package list" to "包名列表",
+    "Priority" to "优先级",
+    "Enabled" to "启用",
+    "ID" to "ID",
+    "Yes" to "是",
+    "No" to "否",
+    "On" to "开",
+    "Off" to "关",
+    "(no task)" to "（无任务）",
+    "(no task description)" to "（无任务描述）",
     "Task description (required)" to "任务描述（必填）",
     "Pick Date" to "选择日期",
     "Pick Time" to "选择时间",
@@ -961,6 +1008,9 @@ private val ZhMap = mapOf(
     "OK" to "确定",
     "Core Connected" to "Core 已连接",
     "Core Disconnected" to "Core 未连接",
+    "COMPLETED" to "已完成",
+    "CANCELLED" to "已取消",
+    "FAILED" to "失败",
     "Choose startup method" to "选择启动方式",
     "Pick the method that matches your phone. Detailed steps are inside each page." to "选择适合你手机的启动方式，详细步骤已放进各自页面。",
     "Wireless ADB startup" to "无线 ADB 启动",
@@ -1078,6 +1128,11 @@ private val ZhMap = mapOf(
     "Set DND to OFF (allow notifications)" to "设置任务期 DND=OFF（允许提醒）",
     "Set DND to NONE (silence all)" to "设置任务期 DND=NONE（全部静音）",
     "Shell" to "Shell",
+    "allowlist" to "允许列表",
+    "blocklist" to "屏蔽列表",
+    "contains" to "包含",
+    "regex" to "正则",
+    "any" to "任意",
     "UIAutomator" to "UIAutomator",
     "Touch input mode" to "触摸注入模式",
     "How taps/swipes are injected to the device." to "控制点击/滑动如何注入到设备。",
@@ -1256,7 +1311,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     ) {
                         Text(tr("Schedules"), style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            text = "Manage scheduled tasks and create new ones. (${schedules.size})",
+                            text = "${tr("Manage scheduled tasks and create new ones.")} (${schedules.size})",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
                         )
@@ -1292,7 +1347,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     ) {
                         Text(tr("Recent Runs"), style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            text = "View recent execution records. (${tasks.size})",
+                            text = "${tr("View recent execution records.")} (${tasks.size})",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
                         )
@@ -1321,7 +1376,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         Text(tr("Back"), fontSize = 12.sp)
                     }
                     Text(
-                        text = "Schedules",
+                        text = tr("Schedules"),
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier
                             .weight(1f)
@@ -1359,7 +1414,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                                 .padding(12.dp)
                         ) {
                             Text(
-                                text = "No schedules yet.",
+                                text = tr("No schedules yet."),
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                             )
@@ -1497,7 +1552,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         Text(tr("Back"), fontSize = 12.sp)
                     }
                     Text(
-                        text = "Recent Runs",
+                        text = tr("Recent Runs"),
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier
                             .weight(1f)
@@ -1522,12 +1577,12 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(12.dp)
-                        ) {
-                            Text(
-                                text = "No runs yet. Submit a task from Task Session or wait for schedules.",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                            )
+                    ) {
+                        Text(
+                            text = tr("No runs yet. Submit a task from Task Session or wait for schedules."),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
                         }
                     } else {
                         LazyColumn(
@@ -1575,7 +1630,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         Text(tr("Back"), fontSize = 12.sp)
                     }
                     Text(
-                        text = if (isEditing) "Edit Schedule" else "Create Schedule",
+                        text = if (isEditing) tr("Edit Schedule") else tr("Create Schedule"),
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier
                             .weight(1f)
@@ -1596,7 +1651,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             maxLines = 3
                         )
                         Text(
-                            text = "Run time: ${formatTsFull(selectedRunAt)}",
+                            text = "${tr("Run time")}: ${formatTsFull(selectedRunAt)}",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                         )
@@ -1637,7 +1692,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             }
                         }
                         Text(
-                            text = "Repeat",
+                            text = tr("Repeat"),
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                         )
@@ -1646,26 +1701,34 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             RepeatModeButton(
-                                text = "Once",
+                                text = tr("Once"),
                                 selected = scheduleRepeatMode == MainViewModel.REPEAT_ONCE,
                                 onClick = { viewModel.scheduleRepeatMode.value = MainViewModel.REPEAT_ONCE },
                                 modifier = Modifier.weight(1f)
                             )
                             RepeatModeButton(
-                                text = "Daily",
+                                text = tr("Daily"),
                                 selected = scheduleRepeatMode == MainViewModel.REPEAT_DAILY,
                                 onClick = { viewModel.scheduleRepeatMode.value = MainViewModel.REPEAT_DAILY },
                                 modifier = Modifier.weight(1f)
                             )
                             RepeatModeButton(
-                                text = "Weekly",
+                                text = tr("Weekly"),
                                 selected = scheduleRepeatMode == MainViewModel.REPEAT_WEEKLY,
                                 onClick = { viewModel.scheduleRepeatMode.value = MainViewModel.REPEAT_WEEKLY },
                                 modifier = Modifier.weight(1f)
                             )
                         }
                         if (scheduleRepeatMode == MainViewModel.REPEAT_WEEKLY) {
-                            val labels = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+                            val labels = listOf(
+                                tr("Mon"),
+                                tr("Tue"),
+                                tr("Wed"),
+                                tr("Thu"),
+                                tr("Fri"),
+                                tr("Sat"),
+                                tr("Sun")
+                            )
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1700,7 +1763,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                                 Spacer(modifier = Modifier.weight(1f))
                             }
                             Text(
-                                text = "Selected days: ${formatWeekdayMask(scheduleRepeatWeekdays)}",
+                                text = "${tr("Selected days")}: ${formatWeekdayMask(scheduleRepeatWeekdays)}",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
                             )
@@ -2026,7 +2089,7 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     if (detail != null) {
         AlertDialog(
             onDismissRequest = { selectedTask = null },
-            title = { Text("Task Details") },
+            title = { Text(tr("Task Details")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (detail.taskSummary.isNotBlank()) {
@@ -2036,44 +2099,44 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         )
                     } else {
                         Text(
-                            text = "No task summary available yet.",
+                            text = tr("No task summary available yet."),
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
-                    Text("id=${detail.taskId}", fontSize = 11.sp)
+                    Text("${tr("Task ID")}=${detail.taskId}", fontSize = 11.sp)
                     Text(
-                        text = "state=${detail.state}" +
-                                if (detail.finalState.isNotBlank()) " / ${detail.finalState}" else "",
+                        text = "${tr("State")}=${tr(detail.state)}" +
+                                if (detail.finalState.isNotBlank()) " / ${tr(detail.finalState)}" else "",
                         fontSize = 11.sp
                     )
                     if (detail.reason.isNotBlank()) {
-                        Text("reason=${detail.reason}", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                        Text("${tr("Reason")}=${detail.reason}", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
                     }
                     if (detail.userTask.isNotBlank()) {
-                        Text("task=${detail.userTask}", fontSize = 11.sp)
+                        Text("${tr("Task")}=${detail.userTask}", fontSize = 11.sp)
                     }
                     if (detail.packageName.isNotBlank()) {
-                        Text("package=${detail.packageName}", fontSize = 11.sp)
+                        Text("${tr("Package name")}=${detail.packageName}", fontSize = 11.sp)
                     }
                     if (detail.targetPage.isNotBlank()) {
-                        Text("target_page=${detail.targetPage}", fontSize = 11.sp)
+                        Text("${tr("Target page")}=${detail.targetPage}", fontSize = 11.sp)
                     }
                     if (detail.source.isNotBlank()) {
-                        Text("source=${detail.source}", fontSize = 11.sp)
+                        Text("${tr("Source")}=${detail.source}", fontSize = 11.sp)
                     }
                     if (detail.scheduleId.isNotBlank()) {
-                        Text("schedule_id=${detail.scheduleId}", fontSize = 11.sp)
+                        Text("${tr("Schedule ID")}=${detail.scheduleId}", fontSize = 11.sp)
                     }
-                    Text("memory_applied=${detail.memoryApplied}", fontSize = 11.sp)
-                    Text("record_enabled=${detail.recordEnabled}", fontSize = 11.sp)
+                    Text("${tr("Memory applied")}=${if (detail.memoryApplied) tr("Yes") else tr("No")}", fontSize = 11.sp)
+                    Text("${tr("Record enabled")}=${if (detail.recordEnabled) tr("Yes") else tr("No")}", fontSize = 11.sp)
                     if (detail.recordFile.isNotBlank()) {
-                        Text("record_file=${detail.recordFile}", fontSize = 11.sp)
+                        Text("${tr("Record file")}=${detail.recordFile}", fontSize = 11.sp)
                     }
                     if (detail.createdAt > 0L) {
-                        Text("created_at=${formatTsFull(detail.createdAt)}", fontSize = 11.sp)
+                        Text("${tr("Created at")}=${formatTsFull(detail.createdAt)}", fontSize = 11.sp)
                     }
                     if (detail.finishedAt > 0L) {
-                        Text("finished_at=${formatTsFull(detail.finishedAt)}", fontSize = 11.sp)
+                        Text("${tr("Finished at")}=${formatTsFull(detail.finishedAt)}", fontSize = 11.sp)
                     }
                 }
             },
@@ -2104,13 +2167,17 @@ fun ScheduleRow(
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                text = "run_at=${formatTsFull(schedule.runAtMs)}, repeat=${formatRepeat(schedule.repeatMode, schedule.repeatWeekdays)}, next=${formatTsFull(schedule.nextRunAt)}, triggered=${schedule.triggerCount}, record=${if (schedule.recordEnabled) "on" else "off"}",
+                text = "${tr("Run time")}=${formatTsFull(schedule.runAtMs)}, " +
+                        "${tr("Repeat")}=${formatRepeat(schedule.repeatMode, schedule.repeatWeekdays)}, " +
+                        "${tr("Next run")}=${formatTsFull(schedule.nextRunAt)}, " +
+                        "${tr("Triggered count")}=${schedule.triggerCount}, " +
+                        "${tr("Record")}=${if (schedule.recordEnabled) tr("On") else tr("Off")}",
                 fontSize = 11.sp,
                 color = scheme.onSurface.copy(alpha = 0.75f)
             )
             if (schedule.packageName.isNotEmpty()) {
                 Text(
-                    text = "package=${schedule.packageName}",
+                    text = "${tr("Package name")}=${schedule.packageName}",
                     fontSize = 11.sp,
                     color = scheme.onSurface.copy(alpha = 0.75f)
                 )
@@ -2120,7 +2187,7 @@ fun ScheduleRow(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "id=${schedule.scheduleId.take(8)}...",
+                    text = "${tr("ID")}=${schedule.scheduleId.take(8)}...",
                     fontSize = 10.sp,
                     color = scheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -2152,14 +2219,17 @@ fun NotificationRuleRow(
             val title = when {
                 rule.name.isNotBlank() -> rule.name
                 rule.actionUserTask.isNotBlank() -> rule.actionUserTask
-                else -> "(no task)"
+                else -> tr("(no task)")
             }
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium
             )
             Text(
-                text = "enabled=${rule.enabled}, priority=${rule.priority}, package_mode=${rule.packageMode}, text_mode=${rule.textMode}",
+                text = "${tr("Enabled")}=${if (rule.enabled) tr("Yes") else tr("No")}, " +
+                        "${tr("Priority")}=${rule.priority}, " +
+                        "${tr("Package mode")}=${tr(rule.packageMode)}, " +
+                        "${tr("Text match mode")}=${tr(rule.textMode)}",
                 fontSize = 11.sp,
                 color = scheme.onSurface.copy(alpha = 0.75f)
             )
@@ -2169,13 +2239,15 @@ fun NotificationRuleRow(
                 tr("Anytime")
             }
             Text(
-                text = "cooldown=${rule.cooldownMs / 1000}s, time_window=$timeWindow, record=${if (rule.actionRecordEnabled) "on" else "off"}",
+                text = "${tr("Cooldown")}=${rule.cooldownMs / 1000}s, " +
+                        "${tr("Time window")}=$timeWindow, " +
+                        "${tr("Record")}=${if (rule.actionRecordEnabled) tr("On") else tr("Off")}",
                 fontSize = 11.sp,
                 color = scheme.onSurface.copy(alpha = 0.75f)
             )
             if (rule.packageList.isNotEmpty()) {
                 Text(
-                    text = "package_list=${rule.packageList.joinToString(", ").take(100)}",
+                    text = "${tr("Package list")}=${rule.packageList.joinToString(", ").take(100)}",
                     fontSize = 11.sp,
                     color = scheme.onSurface.copy(alpha = 0.75f)
                 )
@@ -2185,7 +2257,7 @@ fun NotificationRuleRow(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "id=${rule.id.take(8)}...",
+                    text = "${tr("ID")}=${rule.id.take(8)}...",
                     fontSize = 10.sp,
                     color = scheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -2332,34 +2404,32 @@ fun TaskRow(task: TaskSummary, onClick: () -> Unit) {
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
             Text(
-                text = if (task.userTask.isNotEmpty()) task.userTask else "(no task description)",
+                text = if (task.userTask.isNotEmpty()) task.userTask else tr("(no task description)"),
                 style = MaterialTheme.typography.bodyMedium,
                 color = primaryTextColor
             )
             Spacer(modifier = Modifier.height(2.dp))
-            val stateLabel = buildString {
-                append(task.state)
-                if (task.finalState.isNotEmpty()) {
-                    append(" / ").append(task.finalState)
-                }
-                if (task.packageName.isNotEmpty()) {
-                    append(" / ").append(task.packageName)
-                }
-                if (task.source.isNotEmpty()) {
-                    append(" / ").append(task.source)
-                }
-                if (task.memoryApplied) {
-                    append(" / memory")
-                }
+            val stateParts = mutableListOf(tr(task.state))
+            if (task.finalState.isNotEmpty()) {
+                stateParts += tr(task.finalState)
+            }
+            if (task.packageName.isNotEmpty()) {
+                stateParts += task.packageName
+            }
+            if (task.source.isNotEmpty()) {
+                stateParts += task.source
+            }
+            if (task.memoryApplied) {
+                stateParts += tr("Memory applied")
             }
             Text(
-                text = stateLabel,
+                text = stateParts.joinToString(" / "),
                 fontSize = 11.sp,
                 color = scheme.onSurface.copy(alpha = 0.75f)
             )
             if (task.reason.isNotEmpty()) {
                 Text(
-                    text = "reason=${task.reason}",
+                    text = "${tr("Reason")}=${task.reason}",
                     fontSize = 10.sp,
                     color = scheme.error
                 )
@@ -2529,9 +2599,10 @@ private fun formatPackageDisplay(packageName: String, options: List<AppPackageOp
     }
 }
 
+@Composable
 private fun formatWeekdayMask(mask: Int): String {
     if ((mask and 0x7F) == 0) return "-"
-    val labels = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    val labels = listOf(tr("Mon"), tr("Tue"), tr("Wed"), tr("Thu"), tr("Fri"), tr("Sat"), tr("Sun"))
     val selected = mutableListOf<String>()
     for (i in 0..6) {
         if (((mask shr i) and 1) == 1) {
@@ -2541,11 +2612,12 @@ private fun formatWeekdayMask(mask: Int): String {
     return if (selected.isEmpty()) "-" else selected.joinToString(", ")
 }
 
+@Composable
 private fun formatRepeat(modeRaw: String, weekdays: Int): String {
     return when (modeRaw.lowercase(Locale.getDefault())) {
-        MainViewModel.REPEAT_DAILY -> "daily"
-        MainViewModel.REPEAT_WEEKLY -> "weekly(${formatWeekdayMask(weekdays)})"
-        else -> "once"
+        MainViewModel.REPEAT_DAILY -> tr("Daily")
+        MainViewModel.REPEAT_WEEKLY -> "${tr("Weekly")}(${formatWeekdayMask(weekdays)})"
+        else -> tr("Once")
     }
 }
 
@@ -2803,12 +2875,12 @@ fun LogsTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             if (detail.summary.isNotBlank()) {
                                 Text(detail.summary, fontSize = 12.sp)
                             }
-                            if (detail.timestamp.isNotBlank()) {
-                                Text("ts: ${detail.timestamp}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            if (detail.taskId.isNotBlank()) {
-                                Text("task_id: ${detail.taskId}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
+                        if (detail.timestamp.isNotBlank()) {
+                            Text("${tr("Timestamp")}: ${detail.timestamp}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (detail.taskId.isNotBlank()) {
+                            Text("${tr("Task ID")}: ${detail.taskId}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         }
                     }
                     if (detail.meta.isNotEmpty()) {
@@ -3000,7 +3072,7 @@ private fun TraceCard(entry: TraceEntry, onClick: () -> Unit) {
             }
             if (entry.taskId.isNotBlank()) {
                 Text(
-                    text = "task=${entry.taskId.take(8)}...",
+                    text = "${tr("Task")}=${entry.taskId.take(8)}...",
                     fontSize = 10.sp,
                     color = content.copy(alpha = 0.7f)
                 )
