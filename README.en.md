@@ -4,7 +4,7 @@
 
 # LXB-Framework
 
-**An experimental Android automation framework for repetitive, linear daily tasks**
+**Experimental Android automation framework for repetitive, linear daily tasks**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Android 11+](https://img.shields.io/badge/Android-11%2B-34A853?logo=android&logoColor=white)]()
@@ -14,132 +14,220 @@
 
 </div>
 
-Instead of letting the model roam freely, LXB-Framework uses a **Route-Then-Act** pipeline: a pre-built navigation map handles deterministic page routing, then a VLM takes over to handle the actual on-screen work.
+LXB-Framework does not let the model freely roam across the whole phone UI. It uses a **Route-Then-Act** pipeline: prebuilt navigation maps handle deterministic page routing, and the vision model only steps in when real on-screen interaction is needed.
 
 ---
 
-## Software Preview & Features
+## Software Preview & Feature Overview
 
 ![Software preview](resources/software_en.png)
 
-Built on this pipeline design, the framework currently offers three task execution modes:
+Current core capabilities:
 
-| Mode | Description | Example |
-|------|-------------|---------|
-| **Chat Task** | Type a one-time natural language request and execute immediately | `Help me order one large oat latte from the coffee app` |
-| **Scheduled Task** | Set a trigger time (one-shot / daily / weekly) and let the daemon execute automatically | `Every weekday at 08:30, place my usual coffee order` |
-| **Playbook Fallback** | Write a step-by-step playbook for apps without a navigation map | — |
+- **Chat tasks**: submit one natural-language task and run it immediately
+- **Scheduled tasks**: one-shot / daily / weekly execution, with list-level enable/disable toggles
+- **Notification-triggered tasks**: trigger tasks from notification dump matching with package, title, body, and optional LLM filtering
+- **Playbook fallback**: add step-by-step instructions for apps that do not have a navigation map yet
+- **Dual startup paths**: `Wireless ADB` for non-root devices, `Root startup` for rooted devices
+- **Trace page**: structured core trace cards, detail viewer, and local export
 
 ## How It Works
 
-The Route-Then-Act pipeline is powered by three core mechanisms working together:
+The Route-Then-Act pipeline is supported by several cooperating pieces:
 
-- **Pipeline split** — tasks are divided into a deterministic routing phase (map-based, no vision) and a vision-based action phase (VLM handles dynamic UI).
-- **FSM orchestration** — a state machine (INIT → TASK_DECOMPOSE → APP_RESOLVE → ROUTE_PLAN → ROUTING → VISION_ACT → FINISH/FAIL) keeps execution structured and traceable.
-- **`app_process` daemon** — the backend runs as a shell-level process independent of the Android app lifecycle, enabling reliable background and scheduled execution without relying on Android's fragile service keep-alive mechanisms.
+- **Pipeline split**: tasks are divided into a routing phase and an action phase. Routing is handled as deterministically as possible with maps, then the VLM handles dynamic UI work.
+- **FSM orchestration**: a full FSM keeps INIT, TASK_DECOMPOSE, APP_RESOLVE, ROUTE_PLAN, ROUTING, VISION_ACT, and FINISH/FAIL traceable and debuggable.
+- **`app_process` daemon**: `lxb-core` runs as a shell-level process outside the normal Android app lifecycle, which makes it suitable for background execution, scheduled tasks, and notification triggers.
+- **Device-side split**: `LXB-Ignition` handles startup, configuration, task management, and logs; `lxb-core` handles local automation execution.
 
 ![Overall architecture](resources/architecture_overall.png)
 
 ![Framework internal architecture](resources/architecture_LXB-Framework.png)
 
+## Current Product Shape
+
+The current app is organized into four main areas:
+
+- **Home**: choose startup method (`Wireless ADB` / `Root`), check runtime state, submit chat tasks
+- **Tasks**: manage schedules, notification-triggered rules, and recent runs
+- **Config**: control mode, device-side LLM, unlock policy, map sync, language
+- **Logs**: trace cards, trace details, and trace export
+
+Important UX points in the current design:
+
+- schedules and notification rules can both be **enabled/disabled directly from the list page**
+- input can prefer **ADB Keyboard** and fall back automatically when unavailable
+- touch injection supports both **Shell** and **UIAutomator** strategies
+- UI language follows the system by default: Chinese phones default to Chinese, everything else defaults to English; once the user switches manually, the manual choice wins
+
 ## Requirements
 
-Before getting started, make sure you have the following:
+Before starting, make sure:
 
-- Android **11 (API 30)** or higher (real device recommended; emulators may trigger app detection)
-- **Developer Options** and **Wireless Debugging** enabled on the device (no root, no extra apps required)
-- An **OpenAI-compatible** LLM/VLM endpoint (`/v1/chat/completions` format); any model provider works
+- you are using a real Android device on **Android 11 (API 30)** or above
+- for **Wireless ADB startup**: Developer Options, USB debugging, and Wireless debugging are enabled
+- for **Root startup**: the device is rooted and can grant `su`
+- an **OpenAI Chat Completions-compatible** LLM / VLM endpoint is configured
+  - the app now auto-completes `/chat/completions`
+  - you can enter a higher-level base URL such as `https://xxx/v1`, and the app shows the resolved final request URL in real time
 
 ## Quick Start
 
-Once the requirements are met, follow these steps to get up and running:
+### Option 1: Non-root device (`Wireless ADB startup`)
 
-1. **Enable Developer Options & Debugging**
-   - Go to `Settings → Developer Options` and enable both **USB debugging** and **Wireless debugging**
-   - **USB debugging must be enabled; otherwise the daemon process cannot stay alive**
-
-2. **Check ROM-specific Developer Options** (required on some devices)
+1. Install the latest APK from [Releases](https://github.com/wuwei-crg/LXB-Framework/releases)
+2. Enable the required developer settings on the phone:
+   - `USB debugging`
+   - `Wireless debugging`
+   - **USB debugging must stay enabled, otherwise process keepalive may fail**
+3. Some ROMs need extra adjustments:
 
    | ROM | Action |
    |-----|--------|
-   | MIUI / HyperOS (Xiaomi, POCO) | Enable "USB debugging (Security settings)" — a separate toggle from "USB debugging" |
-   | ColorOS (OPPO / OnePlus) | Disable "Permission monitoring" |
-   | Flyme (Meizu) | Disable "Flyme payment protection" |
+   | MIUI / HyperOS (Xiaomi, POCO) | enable `USB debugging (Security settings)` |
+   | ColorOS (OPPO / OnePlus) | disable `Permission monitoring` |
+   | Flyme (Meizu) | disable `Flyme payment protection` |
 
-3. **Install the APK** — download the latest `lxb-ignition-vX.Y.Z.apk` from [Releases](https://github.com/wuwei-crg/LXB-Framework/releases) and install it
+4. Open `LXB-Ignition` and enter `Wireless ADB startup`
+5. Follow the in-app guide once:
+   - open Developer Options
+   - enable Wireless debugging
+   - open `Pair device with pairing code`
+   - enter the 6-digit pairing code in the app notification
+6. After pairing, start core from the home page. Later launches usually do not need re-pairing as long as Wireless debugging is enabled.
 
-4. **Pair the device** — open LXB-Ignition and follow the in-app pairing guide. The device screen will display a 6-digit pairing code; enter it when prompted. Subsequent launches reconnect automatically
+### Option 2: Rooted device (`Root startup`)
 
-5. **Start the daemon** — after pairing succeeds, the app automatically pushes the backend DEX to the device and starts the daemon via `app_process`. The status indicator will change to **Running**
+1. Install the APK
+2. Open `Root startup` from the home page
+3. Confirm root permission is available
+4. Start core directly through `su`
 
-6. **Configure LLM** — go to the `Config` tab and fill in:
+## First Configuration Pass
 
-   | Parameter | Description | Example |
-   |-----------|-------------|---------|
-   | API Base URL | Model endpoint (OpenAI-compatible) | `https://api.openai.com/v1` |
-   | API Key | Corresponding API key | `sk-...` |
-   | Model | Model name | `gpt-4o-mini`, `qwen-plus` |
+After core is up, check these pages in `Config` first.
 
-7. **(Optional) Sync maps** — in `Config`, set the MapRepo URL to enable automatic stable map downloads. Without maps, the framework falls back to pure vision mode
+### 1. Control Mode Config
 
-## Running Your First Task
+This page decides how taps, swipes, and text input are executed:
 
-With everything set up, type your request in the home screen chat box to launch a task, for example:
+- **Touch input mode**: `Shell` / `UIAutomator`
+- **ADB Keyboard detection**: recommended for more stable Chinese input
+- **Task-time Do Not Disturb**: keep current state, set OFF, or set NONE
 
-```
-Open Bilibili and post a moment with content "test" and title "test"
+### 2. Device-side LLM Config
+
+Fill in:
+
+- `API Base URL`
+- `API Key`
+- `Model`
+
+Current extras:
+
+- **resolved final request URL preview**
+- **multiple saved local LLM profiles**
+- **masked API key display**
+
+### 3. Unlock & Lock Policy
+
+- auto unlock before routing
+- auto lock after task
+- lock PIN / password, only used when swipe alone is not enough
+
+### 4. Map Sync & Source
+
+- set MapRepo URL
+- choose runtime map source (`stable` / `candidate` / `burn`)
+- sync maps by package or identifier
+
+## Task Types
+
+### Chat Tasks
+
+Submit one natural-language request from the home page, for example:
+
+```text
 Open WeChat and send "hello" to File Transfer
+Open Bilibili and post a new status with title test and content test
 ```
 
-The interface will display the current FSM state in real time as the task executes (ROUTE_PLAN → ROUTING → VISION_ACT).
+### Scheduled Tasks
 
-## Scheduled Tasks
+Create them in `Tasks -> Schedules`:
 
-Beyond manual triggering, the framework also supports automatic scheduled execution. Open the `Tasks` tab to create a scheduled task:
+- one-shot / daily / weekly
+- optional target package
+- optional Playbook
+- optional screen recording
+- **can be enabled/disabled directly from the list page**
 
-- Set a trigger time (one-shot, daily, or weekly)
-- Specify the target app package name
-- Write the task instruction
-- Optionally attach a **Playbook** for apps without a map
+### Notification-Triggered Tasks
 
-The daemon's `app_process` design ensures scheduled tasks fire on time even when the screen is locked or the app has been killed by the system.
+Create them in `Tasks -> Notification Triggers`:
 
-## Building Maps for New Apps
+- required package match
+- optional title / body match
+- optional LLM condition
+- optional active time window
+- optional task recording
+- **can be enabled/disabled directly from the list page**
 
-As mentioned earlier, navigation maps are the foundation of the routing phase in the Route-Then-Act pipeline. Maps are built with [LXB-MapBuilder](https://github.com/wuwei-crg/LXB-MapBuilder) and distributed via [LXB-MapRepo](https://github.com/wuwei-crg/LXB-MapRepo). See the MapBuilder README for the full build workflow. Pre-built stable maps can be synced directly from the `Config` tab via the MapRepo URL.
+Current notification-trigger pipeline:
 
-## Usage Tips
+1. dump notifications
+2. detect new notifications
+3. evaluate rules in order
+4. build the final task when matched
+5. push that task into the core queue
 
-- Set the battery policy for LXB-Ignition to **Unrestricted** (especially on MIUI / ColorOS / HyperOS / Honor ROM variants).
-- If an app has no map, write a short **playbook** describing the steps — this significantly improves action stability compared to pure vision.
+## Trace & Debugging
 
-## Related Repositories
+The logs page is now a trace viewer instead of a plain text log panel:
 
-| Repository | Description |
-|------------|-------------|
-| [LXB-MapBuilder](https://github.com/wuwei-crg/LXB-MapBuilder) | Map construction and publishing tool |
-| [LXB-MapRepo](https://github.com/wuwei-crg/LXB-MapRepo) | Stable / candidate navigation map artifacts |
+- each trace entry is rendered as an individual card
+- tapping a card opens structured details
+- latest traces load first
+- older traces load on upward scrolling
+- cached traces can be exported to local storage
 
-## Acknowledgements
+This is the most useful page for debugging FSM flow, notification triggers, and execution failures.
 
-The `app_process` daemon design is inspired by [Shizuku](https://github.com/RikkaApps/Shizuku). LXB-Framework implements its own Wireless ADB pairing and connection and does not depend on Shizuku at runtime.
-This project is also shared with and supported by the [LINUX DO community](https://linux.do/).
+## Usage Notes
 
-Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- set `LXB-Ignition` battery policy to **Unrestricted**
+- without ADB Keyboard, Chinese input falls back to clipboard / shell-based paths and compatibility may vary by app
+- for apps without maps, write short and explicit Playbooks
+- some ROMs behave better with `Shell`, others with `UIAutomator`, so test both control paths
 
 ## Developer Debug Workflow
 
-After code changes, you can quickly install a debug build to your phone for testing:
+After code changes, install a debug build to your phone:
 
-1. Connect your device and confirm ADB is available (for example, `adb devices` shows the device).
-2. Go to `android/LXB-Ignition`.
-3. Run:
+1. connect the device and confirm `adb devices` can see it
+2. go to `android/LXB-Ignition`
+3. run:
 
 ```bash
 ./gradlew :app:installDebug
 ```
 
-After installation, open the debug build of `LXB-Ignition` on the phone and start debugging.
+Then open the debug build of `LXB-Ignition` on the phone.
+
+## Related Repositories
+
+| Repository | Description |
+|------------|-------------|
+| [LXB-MapBuilder](https://github.com/wuwei-crg/LXB-MapBuilder) | map building and publishing tool |
+| [LXB-MapRepo](https://github.com/wuwei-crg/LXB-MapRepo) | stable / candidate map repository |
+
+## Acknowledgements
+
+The `app_process` daemon design is inspired by [Shizuku](https://github.com/RikkaApps/Shizuku).
+
+LXB-Framework implements its own Wireless ADB pairing, connection, and startup flow and does not depend on Shizuku at runtime. The project is also actively shared in the [LINUX DO community](https://linux.do/).
+
+Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
 ## License
 
