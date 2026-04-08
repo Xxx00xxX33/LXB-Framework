@@ -7,6 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -51,6 +55,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -58,6 +63,7 @@ import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -85,6 +91,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val apiKey: String,
         val model: String,
         val updatedAt: Long
+    )
+
+    private data class VisionProbeChallenge(
+        val answer: String,
+        val imagePng: ByteArray
     )
 
     companion object {
@@ -1556,6 +1567,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    private fun buildVisionProbeChallenge(): VisionProbeChallenge {
+        val answer = buildString {
+            repeat(5) {
+                append(Random.nextInt(0, 10))
+            }
+        }
+        val bmp = Bitmap.createBitmap(320, 160, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        canvas.drawColor(Color.rgb(248, 249, 252))
+
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = 72f
+            isFakeBoldText = true
+        }
+        val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 4f
+        }
+
+        fill.color = Color.WHITE
+        canvas.drawRoundRect(18f, 18f, 302f, 142f, 18f, 18f, fill)
+        accent.color = Color.rgb(210, 214, 224)
+        canvas.drawRoundRect(18f, 18f, 302f, 142f, 18f, 18f, accent)
+
+        val noise = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+        }
+        repeat(6) { idx ->
+            noise.color = if (idx % 2 == 0) Color.rgb(210, 80, 80) else Color.rgb(80, 120, 210)
+            val y = 35f + idx * 18f + Random.nextInt(-4, 5)
+            canvas.drawLine(28f, y, 292f, y + Random.nextInt(-8, 9), noise)
+        }
+
+        val guide = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(110, 118, 135)
+            textSize = 20f
+        }
+        canvas.drawText("Read digits only", 86f, 42f, guide)
+        canvas.drawText(answer, 62f, 110f, text)
+
+        val imagePng = ByteArrayOutputStream().use { out ->
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+            bmp.recycle()
+            out.toByteArray()
+        }
+        return VisionProbeChallenge(answer = answer, imagePng = imagePng)
+    }
+
     private fun loadLlmProfilesFromPrefs() {
         val raw = prefs.getString(KEY_LLM_PROFILES_JSON, "") ?: ""
         val list = runCatching {
@@ -1742,7 +1806,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         saveConfig()
 
         viewModelScope.launch {
-            llmTestResult.value = "Testing LLM..."
+            llmTestResult.value = "Testing LLM text + image input..."
 
             // 1) Write device-side config file (shell readable)
             val sync = syncDeviceLlmConfigFile()
@@ -1755,42 +1819,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val llmConfigPath = sync.getOrNull().orEmpty()
             appendLog("[LLM] Config synced to $llmConfigPath")
 
-            // 2) Directly call cloud LLM from APK to validate the config
+            // 2) Directly call cloud LLM from APK with a small probe image to validate multimodal input.
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val json = org.json.JSONObject()
-                        .put("model", model)
-                        .put("max_tokens", 16)
-                        .put(
-                            "messages",
-                            org.json.JSONArray().put(
-                                org.json.JSONObject()
-                                    .put("role", "user")
-                                    .put("content", "Please reply with ok only.")
-                            )
-                        )
-                        .toString()
-                    val body = json.toRequestBody("application/json".toMediaType())
-                    val endpoint = LlmClient.buildEndpointUrl(baseUrl)
-                    val builder = Request.Builder().url(endpoint).post(body)
-                    val key = llmApiKey.value.trim()
-                    if (key.isNotEmpty()) {
-                        builder.addHeader("Authorization", "Bearer $key")
-                    }
-                    val request = builder.build()
-                    httpClient.newCall(request).execute().use { resp ->
-                        val code = resp.code
-                        val text = resp.body?.string() ?: ""
-                        if (code !in 200..299) {
-                            "HTTP $code: ${text.take(200)}"
-                        } else {
-                            val ok = text.contains("ok", ignoreCase = true)
-                            if (ok) {
-                                "LLM call succeeded: response contains ok (HTTP $code)"
-                            } else {
-                                "LLM call succeeded (HTTP $code), but response does not clearly contain ok: ${text.take(120)}"
-                            }
-                        }
+                    val challenge = buildVisionProbeChallenge()
+                    val config = com.lxb.server.cortex.LlmConfig(
+                        baseUrl,
+                        llmApiKey.value.trim(),
+                        model
+                    )
+                    val response = LlmClient().chatOnce(
+                        config,
+                        "You are a strict multimodal connectivity probe.",
+                        "This request includes an image with digits. Read the digits in the image and reply with those digits only. Do not output any extra words, punctuation, spaces, or explanation. If you cannot read the image, reply fail.",
+                        challenge.imagePng,
+                        10_000,
+                        60_000
+                    ).trim()
+                    if (response == challenge.answer) {
+                        "LLM OK: text + image input passed; challenge=${challenge.answer}; device config synced: $llmConfigPath"
+                    } else {
+                        "LLM test failed: expected `${challenge.answer}`, got `${response.take(120)}`"
                     }
                 }.getOrElse { e -> "LLM call failed: ${e.message}" }
             }

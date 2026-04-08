@@ -1152,6 +1152,7 @@ private val ZhMap = mapOf(
     "API Base URL" to "API Base URL",
     "API Key" to "API Key",
     "Model" to "模型",
+    "Please use a model with image recognition capability." to "请使用具有图像识别能力的模型。",
     "Test LLM & sync to device" to "测试 LLM 并同步到设备",
     "Save only" to "仅保存",
     "Save all config only" to "仅保存（保存所有配置）",
@@ -3576,7 +3577,12 @@ fun LlmConfigCard(viewModel: MainViewModel) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    supportingText = { Text(tr("e.g. gpt-4o-mini, qwen-plus")) }
+                    supportingText = {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(tr("e.g. gpt-4o-mini, qwen-plus"))
+                            Text(tr("Please use a model with image recognition capability."))
+                        }
+                    }
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
@@ -3596,7 +3602,7 @@ fun LlmConfigCard(viewModel: MainViewModel) {
                     Text(
                         text = llmTestResult,
                         fontSize = 12.sp,
-                        color = if (llmTestResult.startsWith("LLM ")) {
+                        color = if (llmTestResult.startsWith("LLM OK")) {
                             Color(0xFF4CAF50)
                         } else {
                             Color(0xFFFF9800)
