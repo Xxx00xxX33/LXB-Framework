@@ -1,6 +1,6 @@
-# LXB-Ignition (Android On-Device Runtime)
+# AutoLXB Android Runtime (`LXB-Ignition` workspace)
 
-`android/LXB-Ignition` is the Android runtime workspace of LXB-Framework.
+`android/LXB-Ignition` is the Android runtime workspace for AutoLXB. The workspace name is kept as `LXB-Ignition` during the branding transition.
 
 Current direction:
 
