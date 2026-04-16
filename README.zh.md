@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="resources/logo.jpg" alt="LXB Logo" width="160" />
+<img src="resources/logo.jpg" alt="AutoLXB Logo" width="160" />
 
-# LXB-Framework
+# AutoLXB
 
 **实验性安卓端自动化框架，专注于高频、线性的日常任务自动执行**
 
@@ -14,7 +14,7 @@
 
 </div>
 
-LXB-Framework 不让模型自由探索整个手机界面，而是采用 **Route-Then-Act** 流水线：先尽量用确定性的路线完成页面跳转，再把真正需要“动手”的动态界面交给视觉模型处理。
+AutoLXB（原 LXB-Framework）不让模型自由探索整个手机界面，而是采用 **Route-Then-Act** 流水线：先尽量用确定性的路线完成页面跳转，再把真正需要“动手”的动态界面交给视觉模型处理。
 
 ---
 
@@ -39,7 +39,7 @@ Route-Then-Act 流水线由以下几部分协同支撑：
 - **阶段拆分**：任务被拆成“路线跳转”和“视觉执行”两部分。能稳定靠路线走完的部分尽量不交给视觉模型。
 - **FSM 状态机编排**：`INIT -> TASK_DECOMPOSE -> APP_RESOLVE -> ROUTING -> VISION_ACT -> FINISH/FAIL`
 - **`app_process` 守护进程**：`lxb-core` 以 shell 级后台进程运行，脱离普通 Android App 生命周期，更适合常驻、定时任务和通知触发
-- **设备端前后端分离**：`LXB-Ignition` 负责启动、配置、任务管理与日志查看；`lxb-core` 负责本机自动化执行
+- **设备端前后端分离**：`AutoLXB` 负责启动、配置、任务管理与日志查看；`lxb-core` 负责本机自动化执行
 
 ![整体架构](resources/architecture_overall.png)
 
@@ -93,7 +93,7 @@ Route-Then-Act 流水线由以下几部分协同支撑：
    | ColorOS（OPPO / OnePlus） | 关闭“权限监控” |
    | Flyme（魅族） | 关闭“Flyme 支付保护” |
 
-4. 打开 `LXB-Ignition` 首页，点击 **ADB 启动**
+4. 打开 `AutoLXB` 首页，点击 **ADB 启动**
 5. 按引导完成一次配对：
    - 打开开发者选项
    - 打开无线调试
@@ -224,7 +224,7 @@ Route-Then-Act 流水线由以下几部分协同支撑：
 
 ## 使用建议
 
-- 将 `LXB-Ignition` 的电池策略设为 **无限制**
+- 将 `AutoLXB` 的电池策略设为 **无限制**
 - 未安装 ADB Keyboard 时，中文输入会回退到剪贴板 / shell 输入路径，兼容性可能因 App 而异
 - 对于没有稳定路线的 App，尽量写简短明确的 Playbook
 - 部分 ROM 更适合 `Shell`，部分更适合 `UIAutomator`，可在配置页切换测试
@@ -241,7 +241,7 @@ Route-Then-Act 流水线由以下几部分协同支撑：
 ./gradlew :app:installDebug
 ```
 
-安装完成后，直接打开手机上的 Debug 版 `LXB-Ignition` 进行调试。
+安装完成后，直接打开手机上的 Debug 版 `AutoLXB` 进行调试。
 
 ## 相关仓库
 
@@ -254,7 +254,7 @@ Route-Then-Act 流水线由以下几部分协同支撑：
 
 `app_process` 守护进程的设计思路参考了 [Shizuku](https://github.com/RikkaApps/Shizuku)。
 
-LXB-Framework 自行实现了 Wireless ADB 配对、连接与启动流程，运行时不依赖 Shizuku。本项目也在 [LINUX DO 社区](https://linux.do/) 持续分享与交流。
+AutoLXB 自行实现了 Wireless ADB 配对、连接与启动流程，运行时不依赖 Shizuku。本项目也在 [LINUX DO 社区](https://linux.do/) 持续分享与交流。
 
 第三方声明见：[THIRD_PARTY_NOTICES.zh.md](THIRD_PARTY_NOTICES.zh.md)
 

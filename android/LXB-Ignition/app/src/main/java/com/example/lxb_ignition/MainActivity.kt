@@ -231,7 +231,7 @@ fun LXBIgnitionApp(
                         titleContentColor = MaterialTheme.colorScheme.onSurface,
                         actionIconContentColor = MaterialTheme.colorScheme.primary
                     ),
-                    title = { Text("${tr("LXB Ignition")} v${BuildConfig.VERSION_NAME}") },
+                    title = { Text("${tr("AutoLXB")} v${BuildConfig.VERSION_NAME}") },
                     actions = {
                         TextButton(onClick = { viewModel.checkAppUpdateFromGithub() }) {
                             Text(tr("Check update"), fontSize = 12.sp)
@@ -938,7 +938,7 @@ private fun CompactCoreStatusPanel(
                 ) {
                     GlyphBadge(glyph = "✓", accentColor = AppSuccess, size = 34.dp)
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(tr("LXB Core is running"), style = MaterialTheme.typography.titleSmall)
+                        Text(tr("AutoLXB Core is running"), style = MaterialTheme.typography.titleSmall)
                         Text(
                             text = tr("Core is ready"),
                             fontSize = 12.sp,
@@ -996,7 +996,7 @@ private fun CompactStartupPanel(
             ) {
                 GlyphBadge(glyph = "⚡", accentColor = MaterialTheme.colorScheme.primary, size = 34.dp)
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(tr("Start LXB Core in one tap"), style = MaterialTheme.typography.titleSmall)
+                    Text(tr("Start AutoLXB Core in one tap"), style = MaterialTheme.typography.titleSmall)
                     Text(
                         text = tr("Choose the startup method that matches your phone. Root is the shortest path, and Wireless ADB is the easiest path for most phones."),
                         fontSize = 12.sp,
@@ -1357,7 +1357,7 @@ private fun RootStartGuidePage(
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Text(
-                        text = if (coreRuntime.ready) tr("LXB Core is running") else tr("Get started"),
+                        text = if (coreRuntime.ready) tr("AutoLXB Core is running") else tr("Get started"),
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.70f)
                     )
@@ -1599,7 +1599,7 @@ private val LocalUiI18n = staticCompositionLocalOf { UiI18n("en") }
 private fun tr(text: String): String = LocalUiI18n.current.tr(text)
 
 private val ZhMap = mapOf(
-    "LXB Ignition" to "LXB 点火",
+    "AutoLXB" to "AutoLXB",
     "Update" to "更新",
     "Check update" to "检查更新",
     "Control" to "控制",
@@ -1747,11 +1747,13 @@ private val ZhMap = mapOf(
     "Latest attempt trace" to "最近尝试轨迹",
     "Delete task route" to "删除任务路线",
     "Task Route Editor" to "任务路线编辑",
+    "Route Editor" to "路线编辑",
     "Open task route editor" to "打开任务路线编辑页",
     "Task route editing is available after the task config has been saved once." to "任务配置至少保存一次后，才能编辑对应的任务路线。",
     "No task route data yet." to "暂时还没有任务路线数据。",
     "Tap a card to view full details." to "点击卡片查看完整详情。",
-    "Review the latest captured path, delete noisy actions, and save only the useful route." to "查看最近一次记录到的路径，删除噪声动作，只保留有用路线。",
+    "Review the latest captured path, delete noisy actions, and save only the useful route." to "查看最近一次记录到的路径，把不要的动作移出路线，只保留有用步骤。",
+    "Open any step to inspect locator, expected result, and fallback details." to "点开任一步骤，即可查看定位信息、预期结果和兜底信息。",
     "Editable Trace" to "可编辑轨迹",
     "The newest captured trace is editable, even if the task did not finish successfully." to "最近一次记录到的轨迹都可以编辑，即使任务最终没有成功完成。",
     "No captured trace yet." to "暂时还没有可编辑的轨迹。",
@@ -1777,12 +1779,15 @@ private val ZhMap = mapOf(
     "Outputs" to "输出",
     "Step" to "步骤",
     "Step ID" to "步骤 ID",
+    "Route Step" to "路线步骤",
     "Source action ID" to "来源动作 ID",
     "Action" to "动作",
     "Action ID" to "动作 ID",
     "Operation" to "操作",
     "Arguments" to "参数",
     "Fallback point" to "兜底坐标",
+    "Tap to view locator and fallback details." to "点击查看定位与兜底详情。",
+    "Details" to "详情",
     "Semantic note" to "语义备注",
     "Expected result" to "预期结果",
     "Locator" to "定位器",
@@ -1792,8 +1797,12 @@ private val ZhMap = mapOf(
     "Page semantics" to "页面语义",
     "Execution result" to "执行结果",
     "Execution error" to "执行错误",
-    "Selected deletions" to "已选删除项",
-    "Delete from saved route" to "从已保存路线中删除",
+    "Current Route" to "当前路线",
+    "Removed from Route" to "已移出路线",
+    "Move out of route" to "移出路线",
+    "Restore to route" to "恢复到路线",
+    "Removed actions will not be saved into the final route." to "下面这些动作不会被保存进最终路线，保存前也可以恢复回来。",
+    "No actions left in route." to "当前路线里已经没有动作了。",
     "Save manual route" to "手动保存路线",
     "Saving..." to "保存中...",
     "Finish after replay" to "回放结束后直接结束任务",
@@ -2100,8 +2109,8 @@ private val ZhMap = mapOf(
     "(not set)" to "（未设置）",
     "Get started" to "开始使用",
     "Core is ready" to "核心已就绪",
-    "LXB Core is running" to "LXB Core 正在运行",
-    "Start LXB Core in one tap" to "一键启动 LXB Core",
+    "AutoLXB Core is running" to "AutoLXB Core 正在运行",
+    "Start AutoLXB Core in one tap" to "一键启动 AutoLXB Core",
     "Choose the startup method that matches your phone. Root is the shortest path, and Wireless ADB is the easiest path for most phones." to "选择适合你手机的启动方式。Root 路径最短，Wireless ADB 更适合大多数非 Root 手机。",
     "Stop Core" to "停止 Core",
     "Refresh status" to "刷新状态",
@@ -3181,7 +3190,6 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             } else {
                 TaskRouteEditorPage(
                     modifier = modifier,
-                    target = target,
                     routeDetail = taskMapDetail,
                     loading = taskMapDetailLoading,
                     saving = taskMapSaving,
@@ -3201,27 +3209,6 @@ fun TasksTab(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             userPlaybook = target.userPlaybook,
                             mode = target.mode
                         )
-                    },
-                    onDeleteTaskMap = {
-                        val key = taskMapDetail?.taskKeyHash.orEmpty()
-                        viewModel.deleteTaskMapByQuery(
-                            taskKeyHash = key,
-                            source = target.source,
-                            sourceId = target.sourceId,
-                            packageName = target.packageName,
-                            userTask = target.userTask,
-                            userPlaybook = target.userPlaybook,
-                            mode = target.mode
-                        ) {
-                            viewModel.loadTaskMapDetailByQuery(
-                                source = target.source,
-                                sourceId = target.sourceId,
-                                packageName = target.packageName,
-                                userTask = target.userTask,
-                                userPlaybook = target.userPlaybook,
-                                mode = target.mode
-                            )
-                        }
                     },
                     onSaveManualTaskMap = { deleteIds, finishAfterReplay ->
                         val key = taskMapDetail?.taskKeyHash.orEmpty()
@@ -3331,19 +3318,15 @@ private fun TaskDetailDialog(
 @Composable
 private fun TaskRouteEditorPage(
     modifier: Modifier = Modifier,
-    target: RouteEditorTarget,
     routeDetail: TaskMapDetail?,
     loading: Boolean,
     saving: Boolean,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
-    onDeleteTaskMap: () -> Unit,
     onSaveManualTaskMap: (List<String>, Boolean) -> Unit
 ) {
     val scrollState = rememberScrollState()
     val editableRecord = routeDetail?.latestAttemptRecord ?: routeDetail?.latestSuccessRecord
-    val showSeparateSuccessRecord = routeDetail?.latestSuccessRecord != null &&
-        !isSameTaskRouteRecord(routeDetail.latestSuccessRecord, editableRecord)
     var deleteActionIds by remember(editableRecord?.createdAtMs, editableRecord?.actions?.size) {
         mutableStateOf(setOf<String>())
     }
@@ -3357,71 +3340,19 @@ private fun TaskRouteEditorPage(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedButton(
-                onClick = onBack,
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                modifier = Modifier.height(32.dp)
-            ) {
-                Text(tr("Back"), fontSize = 12.sp)
-            }
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    text = tr("Task Route Editor"),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = tr("Review the latest captured path, delete noisy actions, and save only the useful route."),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
-                )
-            }
-            OutlinedButton(
-                onClick = onRefresh,
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                modifier = Modifier.height(32.dp)
-            ) {
-                Text(tr("Refresh"), fontSize = 12.sp)
-            }
-        }
+        PageHeaderBlock(
+            title = tr("Route Editor"),
+            subtitle = tr("Review the latest captured path, delete noisy actions, and save only the useful route."),
+            glyph = "⇄",
+            onBack = onBack,
+            primaryActionLabel = tr("Refresh"),
+            onPrimaryAction = onRefresh
+        )
 
         SurfacePanel(
             modifier = Modifier.fillMaxWidth(),
-            background = MaterialTheme.colorScheme.primaryContainer,
-            borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
-        ) {
-            Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                SheetHeader(
-                    title = tr("Task route target"),
-                    subtitle = tr("This page edits the route asset for one exact task only.")
-                )
-                DetailTextLine(tr("Summary"), target.title.ifBlank { tr("(no task description)") })
-                if (target.source.isNotBlank()) DetailTextLine(tr("Source"), target.source)
-                if (target.sourceId.isNotBlank()) DetailTextLine(tr("Source ID"), target.sourceId)
-                if (target.packageName.isNotBlank()) DetailTextLine(tr("Package name"), target.packageName)
-                if (target.mode.isNotBlank()) DetailTextLine(tr("Task route mode"), formatTaskRouteMode(target.mode))
-                Text(
-                    text = tr("Tap a card to view full details."),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                )
-            }
-        }
-
-        SurfacePanel(
-            modifier = Modifier.fillMaxWidth(),
-            background = MaterialTheme.colorScheme.surface,
-            borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.62f)
+            background = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.34f).compositeOver(MaterialTheme.colorScheme.surface),
+            borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
         ) {
             Row(
                 modifier = Modifier.padding(18.dp),
@@ -3461,10 +3392,9 @@ private fun TaskRouteEditorPage(
             )
         }
         if (routeDetail != null) {
-            TaskMapMetaSection(detail = routeDetail)
             SavedTaskMapSection(taskMap = routeDetail.taskMap)
             TaskRouteRecordSection(
-                title = tr("Editable Trace"),
+                title = tr("Current Route"),
                 emptyText = tr("No captured trace yet."),
                 record = editableRecord,
                 editable = true,
@@ -3479,53 +3409,8 @@ private fun TaskRouteEditorPage(
                 },
                 onSaveManual = { onSaveManualTaskMap(deleteActionIds.toList(), finishAfterReplay) }
             )
-            Text(
-                text = tr("The newest captured trace is editable, even if the task did not finish successfully."),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.70f)
-            )
-            if (showSeparateSuccessRecord) {
-                TaskRouteRecordSection(
-                    title = tr("Latest Success Trace"),
-                    emptyText = tr("No latest success trace yet."),
-                    record = routeDetail.latestSuccessRecord,
-                    editable = false,
-                    saving = false,
-                    selectedDeleteIds = emptySet(),
-                    onToggleDelete = {},
-                    onSaveManual = {}
-                )
-            }
-            if (routeDetail.hasMap) {
-                SurfacePanel(
-                    modifier = Modifier.fillMaxWidth(),
-                    background = AppErrorSoft,
-                    borderColor = AppError.copy(alpha = 0.18f)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Text(tr("Delete task route"), style = MaterialTheme.typography.titleSmall, color = AppError)
-                        OutlinedButton(onClick = onDeleteTaskMap, modifier = Modifier.fillMaxWidth()) {
-                            Text(tr("Delete task route"))
-                        }
-                    }
-                }
-            }
         }
     }
-}
-
-private fun isSameTaskRouteRecord(
-    left: TaskRouteRecordSnapshot?,
-    right: TaskRouteRecordSnapshot?
-): Boolean {
-    if (left == null || right == null) return false
-    if (left === right) return true
-    return left.taskId == right.taskId &&
-        left.createdAtMs == right.createdAtMs &&
-        left.actions.size == right.actions.size
 }
 
 @Composable
@@ -3591,72 +3476,291 @@ private fun TaskMapMetaSection(detail: TaskMapDetail) {
 
 @Composable
 private fun SavedTaskMapSection(taskMap: TaskMapSnapshot?) {
-    Card {
+    var selectedStep by remember(taskMap?.createdAtMs, taskMap?.segments?.size) {
+        mutableStateOf<TaskMapStepSnapshot?>(null)
+    }
+    SurfacePanel(
+        modifier = Modifier.fillMaxWidth(),
+        background = MaterialTheme.colorScheme.surface,
+        borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.52f)
+    ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Text(tr("Saved Route"), style = MaterialTheme.typography.titleSmall)
-            if (taskMap == null) {
-                Text(tr("No saved route yet."), fontSize = 12.sp)
-                return@Column
+            SheetHeader(
+                title = tr("Saved Route"),
+                subtitle = tr("Open any step to inspect locator, expected result, and fallback details.")
+            )
+            if (taskMap == null || taskMap.segments.isEmpty()) {
+                Text(
+                    text = tr("No saved route yet."),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+                )
+            } else {
+                taskMap.segments.forEachIndexed { index, segment ->
+                    SavedRouteSegmentBlock(
+                        index = index,
+                        segment = segment,
+                        onOpenStep = { selectedStep = it }
+                    )
+                }
             }
-            if (taskMap.packageName.isNotBlank()) DetailTextLine(tr("Package name"), taskMap.packageName)
-            if (taskMap.packageLabel.isNotBlank()) DetailTextLine(tr("App label"), taskMap.packageLabel)
-            if (taskMap.createdFromTaskId.isNotBlank()) DetailTextLine(tr("Created from task"), taskMap.createdFromTaskId)
-            if (taskMap.createdAtMs > 0L) DetailTextLine(tr("Created at"), formatTsFull(taskMap.createdAtMs))
-            if (taskMap.lastReplayStatus.isNotBlank()) DetailTextLine(tr("Last replay status"), taskMap.lastReplayStatus)
-            DetailTextLine(tr("Finish after replay"), if (taskMap.finishAfterReplay) tr("Yes") else tr("No"))
-            taskMap.segments.forEachIndexed { index, segment ->
-                TaskMapSegmentCard(index = index, segment = segment)
+        }
+    }
+    selectedStep?.let { step ->
+        TaskMapStepDetailDialog(
+            step = step,
+            onDismiss = { selectedStep = null }
+        )
+    }
+}
+
+@Composable
+private fun SavedRouteSegmentBlock(
+    index: Int,
+    segment: TaskMapSegmentSnapshot,
+    onOpenStep: (TaskMapStepSnapshot) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Text(
+                    text = "${tr("Segment")} ${index + 1}",
+                    style = MaterialTheme.typography.labelLarge
+                )
+                if (segment.subTaskDescription.isNotBlank()) {
+                    Text(
+                        text = segment.subTaskDescription,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.76f)
+                    )
+                }
             }
+            StatusTag(
+                text = "${segment.steps.size} ${tr("Step")}",
+                accentColor = MaterialTheme.colorScheme.primary
+            )
+        }
+        segment.steps.forEachIndexed { stepIndex, step ->
+            SavedRouteStepRow(
+                index = stepIndex,
+                step = step,
+                onClick = { onOpenStep(step) }
+            )
+        }
+        if (segment.successCriteria.isNotBlank()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Text(
+                    text = tr("Expected"),
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = segment.successCriteria,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+                )
+            }
+        }
+        if (segment.inputs.isNotEmpty() || segment.outputs.isNotEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (segment.inputs.isNotEmpty()) {
+                    CompactMetaPill(
+                        modifier = Modifier.weight(1f),
+                        label = tr("Input"),
+                        value = segment.inputs.joinToString(" / "),
+                        accentColor = MaterialTheme.colorScheme.secondary
+                    )
+                }
+                if (segment.outputs.isNotEmpty()) {
+                    CompactMetaPill(
+                        modifier = Modifier.weight(1f),
+                        label = tr("Output"),
+                        value = segment.outputs.joinToString(" / "),
+                        accentColor = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f))
+    }
+}
+
+@Composable
+private fun SavedRouteStepRow(
+    index: Int,
+    step: TaskMapStepSnapshot,
+    onClick: () -> Unit
+) {
+    val summary = buildString {
+        append(step.op.ifBlank { tr("Step") })
+        if (step.args.isNotEmpty()) {
+            append(": ")
+            append(step.args.joinToString(" "))
+        }
+    }
+    SurfacePanel(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        background = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f).compositeOver(MaterialTheme.colorScheme.surface),
+        borderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            StatusTag(
+                text = "${index + 1}",
+                accentColor = MaterialTheme.colorScheme.primary
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    text = summary,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.86f)
+                )
+                val hint = when {
+                    step.semanticNote.isNotBlank() -> step.semanticNote
+                    step.expected.isNotBlank() -> step.expected
+                    else -> tr("Tap to view locator and fallback details.")
+                }
+                Text(
+                    text = hint,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = tr("Details"),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.primary
+            )
         }
     }
 }
 
 @Composable
-private fun TaskMapSegmentCard(index: Int, segment: TaskMapSegmentSnapshot) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+private fun CompactMetaPill(
+    modifier: Modifier = Modifier,
+    label: String,
+    value: String,
+    accentColor: Color
+) {
+    SurfacePanel(
+        modifier = modifier,
+        background = accentColor.copy(alpha = 0.08f).compositeOver(MaterialTheme.colorScheme.surface),
+        borderColor = accentColor.copy(alpha = 0.16f),
+        shape = RoundedCornerShape(18.dp)
+    ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Text("${tr("Segment")} ${index + 1}", style = MaterialTheme.typography.labelLarge)
-            if (segment.segmentId.isNotBlank()) DetailTextLine(tr("Segment ID"), segment.segmentId)
-            if (segment.subTaskId.isNotBlank()) DetailTextLine(tr("Sub-task ID"), segment.subTaskId)
-            DetailTextLine(tr("Sub-task index"), segment.subTaskIndex.toString())
-            if (segment.subTaskDescription.isNotBlank()) DetailTextLine(tr("Task description"), segment.subTaskDescription)
-            if (segment.successCriteria.isNotBlank()) DetailTextLine(tr("Success criteria"), segment.successCriteria)
-            if (segment.packageName.isNotBlank()) DetailTextLine(tr("Package name"), segment.packageName)
-            if (segment.packageLabel.isNotBlank()) DetailTextLine(tr("App label"), segment.packageLabel)
-            if (segment.inputs.isNotEmpty()) DetailTextLine(tr("Inputs"), segment.inputs.joinToString(", "))
-            if (segment.outputs.isNotEmpty()) DetailTextLine(tr("Outputs"), segment.outputs.joinToString(", "))
-            segment.steps.forEachIndexed { stepIndex, step ->
-                TaskMapStepCard(index = stepIndex, step = step)
-            }
+            Text(
+                text = label,
+                fontSize = 10.sp,
+                color = accentColor
+            )
+            Text(
+                text = value,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.76f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
 
 @Composable
-private fun TaskMapStepCard(index: Int, step: TaskMapStepSnapshot) {
-    Card {
+private fun TaskMapStepDetailDialog(
+    step: TaskMapStepSnapshot,
+    onDismiss: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("Route Step")) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(scrollState),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (step.stepId.isNotBlank()) DetailTextLine(tr("Step ID"), step.stepId)
+                if (step.sourceActionId.isNotBlank()) DetailTextLine(tr("Source action ID"), step.sourceActionId)
+                if (step.op.isNotBlank()) DetailTextLine(tr("Operation"), step.op)
+                if (step.args.isNotEmpty()) DetailTextLine(tr("Arguments"), step.args.joinToString(" "))
+                if (step.semanticNote.isNotBlank()) DetailTextLine(tr("Page semantics"), step.semanticNote)
+                if (step.expected.isNotBlank()) DetailTextLine(tr("Expected"), step.expected)
+                if (step.fallbackPoint.isNotBlank()) DetailTextLine(tr("Fallback point"), step.fallbackPoint)
+                if (step.locatorFields.isNotEmpty()) {
+                    TraceDetailSection(title = tr("Locator"), items = step.locatorFields)
+                }
+            }
+        },
+        confirmButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text(tr("Close"))
+            }
+        }
+    )
+}
+
+@Composable
+private fun RemovedTaskRouteSection(
+    actions: List<TaskRouteActionSnapshot>,
+    onRestore: (String) -> Unit,
+    onOpenDetail: (TaskRouteActionSnapshot) -> Unit
+) {
+    if (actions.isEmpty()) return
+    SurfacePanel(
+        modifier = Modifier.fillMaxWidth(),
+        background = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.28f).compositeOver(MaterialTheme.colorScheme.surface),
+        borderColor = MaterialTheme.colorScheme.error.copy(alpha = 0.14f)
+    ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("${tr("Step")} ${index + 1}", style = MaterialTheme.typography.labelMedium)
-            if (step.stepId.isNotBlank()) DetailTextLine(tr("Step ID"), step.stepId)
-            if (step.sourceActionId.isNotBlank()) DetailTextLine(tr("Source action ID"), step.sourceActionId)
-            if (step.op.isNotBlank()) DetailTextLine(tr("Operation"), step.op)
-            if (step.args.isNotEmpty()) DetailTextLine(tr("Arguments"), step.args.joinToString(" "))
-            if (step.fallbackPoint.isNotBlank()) DetailTextLine(tr("Fallback point"), step.fallbackPoint)
-            if (step.semanticNote.isNotBlank()) DetailTextLine(tr("Semantic note"), step.semanticNote)
-            if (step.expected.isNotBlank()) DetailTextLine(tr("Expected result"), step.expected)
-            if (step.locatorFields.isNotEmpty()) {
-                TraceDetailSection(
-                    title = tr("Locator"),
-                    items = step.locatorFields
+            SheetHeader(
+                title = tr("Removed from Route"),
+                subtitle = tr("Removed actions will not be saved into the final route.")
+            )
+            actions.forEachIndexed { index, action ->
+                TaskRouteActionCard(
+                    index = index,
+                    action = action,
+                    editable = true,
+                    removed = true,
+                    onToggleRouteState = { onRestore(action.actionId) },
+                    onOpenDetail = { onOpenDetail(action) }
                 )
             }
         }
@@ -3677,50 +3781,73 @@ private fun TaskRouteRecordSection(
     var selectedAction by remember(record?.createdAtMs, record?.actions?.size) {
         mutableStateOf<TaskRouteActionSnapshot?>(null)
     }
-    Card {
+    val actions = record?.actions.orEmpty()
+    val keptActions = if (editable) {
+        actions.filterNot { selectedDeleteIds.contains(it.actionId) }
+    } else {
+        actions
+    }
+    val removedActions = if (editable) {
+        actions.filter { selectedDeleteIds.contains(it.actionId) }
+    } else {
+        emptyList()
+    }
+    SurfacePanel(
+        modifier = Modifier.fillMaxWidth(),
+        background = MaterialTheme.colorScheme.surface,
+        borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.52f)
+    ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
+            SheetHeader(
+                title = title,
+                subtitle = tr("Tap a card to view full details.")
+            )
             if (record == null) {
-                Text(emptyText, fontSize = 12.sp)
+                Text(
+                    text = emptyText,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+                )
                 return@Column
             }
-            if (record.taskId.isNotBlank()) DetailTextLine(tr("Task ID"), record.taskId)
-            if (record.rootTask.isNotBlank()) DetailTextLine(tr("Root task"), record.rootTask)
-            if (record.packageName.isNotBlank()) DetailTextLine(tr("Package name"), record.packageName)
-            if (record.packageLabel.isNotBlank()) DetailTextLine(tr("App label"), record.packageLabel)
-            if (record.createdAtMs > 0L) DetailTextLine(tr("Created at"), formatTsFull(record.createdAtMs))
-            if (record.status.isNotBlank()) DetailTextLine(tr("Status"), record.status)
-            if (record.finalState.isNotBlank()) DetailTextLine(tr("Final state"), record.finalState)
-            if (record.reason.isNotBlank()) DetailTextLine(tr("Reason"), record.reason)
             if (editable) {
-                DetailTextLine(tr("Selected deletions"), selectedDeleteIds.size.toString())
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = onSaveManual,
-                        enabled = !saving && record.actions.isNotEmpty()
+                        enabled = !saving && keptActions.isNotEmpty()
                     ) {
                         Text(if (saving) tr("Saving...") else tr("Save manual route"))
                     }
                 }
             }
-            if (record.actions.isEmpty()) {
-                Text(tr("No trace actions yet."), fontSize = 12.sp)
+            if (keptActions.isEmpty()) {
+                Text(
+                    if (editable) tr("No actions left in route.") else tr("No trace actions yet."),
+                    fontSize = 12.sp
+                )
             } else {
-                record.actions.forEachIndexed { index, action ->
+                keptActions.forEachIndexed { index, action ->
                     TaskRouteActionCard(
                         index = index,
                         action = action,
                         editable = editable,
-                        checked = selectedDeleteIds.contains(action.actionId),
-                        onToggleDelete = { onToggleDelete(action.actionId) },
+                        removed = false,
+                        onToggleRouteState = { onToggleDelete(action.actionId) },
                         onOpenDetail = { selectedAction = action }
                     )
                 }
             }
         }
+    }
+    if (editable) {
+        RemovedTaskRouteSection(
+            actions = removedActions,
+            onRestore = onToggleDelete,
+            onOpenDetail = { selectedAction = it }
+        )
     }
     selectedAction?.let { action ->
         TaskRouteActionDetailDialog(
@@ -3735,8 +3862,8 @@ private fun TaskRouteActionCard(
     index: Int,
     action: TaskRouteActionSnapshot,
     editable: Boolean,
-    checked: Boolean,
-    onToggleDelete: () -> Unit,
+    removed: Boolean,
+    onToggleRouteState: () -> Unit,
     onOpenDetail: () -> Unit
 ) {
     val summary = when {
@@ -3745,77 +3872,108 @@ private fun TaskRouteActionCard(
         action.args.isNotEmpty() -> action.args.joinToString(" ")
         else -> action.op
     }
-    val accentColor = if (action.execError.isNotBlank()) {
+    val baseAccentColor = if (removed) {
+        MaterialTheme.colorScheme.error
+    } else if (action.execError.isNotBlank()) {
         MaterialTheme.colorScheme.error
     } else {
         MaterialTheme.colorScheme.primary
+    }
+    val background = if (removed) {
+        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.28f).compositeOver(MaterialTheme.colorScheme.surface)
+    } else {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.32f).compositeOver(MaterialTheme.colorScheme.surface)
+    }
+    val border = if (removed) {
+        MaterialTheme.colorScheme.error.copy(alpha = 0.14f)
+    } else {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+    }
+    val hint = when {
+        action.execError.isNotBlank() -> action.execError
+        action.execResult.isNotBlank() -> action.execResult
+        else -> summary
     }
     SurfacePanel(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onOpenDetail() },
-        background = MaterialTheme.colorScheme.surface,
-        borderColor = accentColor.copy(alpha = 0.18f)
+        background = background,
+        borderColor = border,
+        shape = RoundedCornerShape(20.dp)
     ) {
         Row(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.Top
         ) {
-            GlyphBadge(
-                glyph = when (action.op.uppercase(Locale.ROOT)) {
-                    "TAP" -> "⌖"
-                    "SWIPE" -> "↕"
-                    "INPUT" -> "⌨"
-                    "BACK" -> "←"
-                    else -> "•"
-                },
-                accentColor = accentColor
+            StatusTag(
+                text = "${index + 1}",
+                accentColor = baseAccentColor
             )
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.Top
                 ) {
-                    Text("${tr("Action")} ${index + 1}", style = MaterialTheme.typography.labelLarge)
-                    if (editable) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = checked,
-                                onCheckedChange = { onToggleDelete() }
-                            )
-                            Text(tr("Delete from saved route"), fontSize = 12.sp)
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = summary.take(160),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.86f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${tr("Operation")}=${action.op.ifBlank { "-" }}  •  ${tr("Turn")}=${action.turn}",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f)
+                        )
+                    }
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = tr("Details"),
+                            fontSize = 11.sp,
+                            color = baseAccentColor
+                        )
+                        if (editable) {
+                            TextButton(
+                                onClick = onToggleRouteState,
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 0.dp, vertical = 0.dp)
+                            ) {
+                                Text(
+                                    if (removed) tr("Restore to route") else tr("Move out of route"),
+                                    fontSize = 11.sp,
+                                    color = if (removed) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.error
+                                    }
+                                )
+                            }
                         }
                     }
                 }
                 Text(
-                    text = "${tr("Operation")}=${action.op.ifBlank { "-" }}  •  ${tr("Turn")}=${action.turn}",
+                    text = hint.take(180),
                     fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
-                )
-                if (action.execResult.isNotBlank() || action.execError.isNotBlank()) {
-                    Text(
-                        text = if (action.execError.isNotBlank()) {
-                            "${tr("Execution error")}=${action.execError}"
-                        } else {
-                            "${tr("Execution result")}=${action.execResult}"
-                        },
-                        fontSize = 11.sp,
-                        color = if (action.execError.isNotBlank()) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
-                        }
-                    )
-                }
-                Text(
-                    text = "${tr("Summary")}=${summary.take(160)}",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                    color = if (action.execError.isNotBlank()) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f)
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

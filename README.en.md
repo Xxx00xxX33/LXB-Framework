@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="resources/logo.jpg" alt="LXB Logo" width="160" />
+<img src="resources/logo.jpg" alt="AutoLXB Logo" width="160" />
 
-# LXB-Framework
+# AutoLXB
 
 **Experimental Android automation framework focused on repetitive, linear daily tasks**
 
@@ -14,7 +14,7 @@
 
 </div>
 
-LXB-Framework does not let the model freely explore the whole phone UI. It follows a **Route-Then-Act** pipeline: deterministic routing is handled first, and the vision model only steps in when real dynamic interaction is needed.
+AutoLXB (formerly LXB-Framework) does not let the model freely explore the whole phone UI. It follows a **Route-Then-Act** pipeline: deterministic routing is handled first, and the vision model only steps in when real dynamic interaction is needed.
 
 ---
 
@@ -39,7 +39,7 @@ The Route-Then-Act pipeline is supported by several cooperating parts:
 - **Phase split**: each task is split into route navigation and visual execution. Anything stable enough for routing should not consume vision-model budget.
 - **FSM orchestration**: `INIT -> TASK_DECOMPOSE -> APP_RESOLVE -> ROUTING -> VISION_ACT -> FINISH/FAIL`
 - **`app_process` daemon**: `lxb-core` runs as a shell-level background process outside the normal Android app lifecycle, which makes it suitable for always-on runtime, schedules, and notification triggers
-- **Device-side separation**: `LXB-Ignition` handles startup, configuration, task management, and logs; `lxb-core` handles local automation execution
+- **Device-side separation**: the `AutoLXB` app handles startup, configuration, task management, and logs; `lxb-core` handles local automation execution
 
 ![Overall architecture](resources/architecture_overall.png)
 
@@ -93,7 +93,7 @@ Before starting, make sure:
    | ColorOS (OPPO / OnePlus) | disable `Permission monitoring` |
    | Flyme (Meizu) | disable `Flyme payment protection` |
 
-4. Open `LXB-Ignition` and tap **ADB startup**
+4. Open `AutoLXB` and tap **ADB startup**
 5. Complete the guide once:
    - open Developer Options
    - enable Wireless debugging
@@ -224,7 +224,7 @@ This is the most useful page for debugging FSM transitions, notification-trigger
 
 ## Usage Notes
 
-- set `LXB-Ignition` battery policy to **Unrestricted**
+- set `AutoLXB` battery policy to **Unrestricted**
 - without ADB Keyboard, Chinese input falls back to clipboard / shell-based paths and compatibility may vary by app
 - for apps without stable routes, write short and explicit Playbooks
 - some ROMs behave better with `Shell`, others with `UIAutomator`, so test both paths
@@ -241,7 +241,7 @@ After code changes, install a debug build to your phone:
 ./gradlew :app:installDebug
 ```
 
-Then open the debug build of `LXB-Ignition` on the phone.
+Then open the debug build of `AutoLXB` on the phone.
 
 ## Related Repositories
 
@@ -254,7 +254,7 @@ Then open the debug build of `LXB-Ignition` on the phone.
 
 The `app_process` daemon design is inspired by [Shizuku](https://github.com/RikkaApps/Shizuku).
 
-LXB-Framework implements its own Wireless ADB pairing, connection, and startup flow and does not depend on Shizuku at runtime. The project is also actively shared in the [LINUX DO community](https://linux.do/).
+AutoLXB implements its own Wireless ADB pairing, connection, and startup flow and does not depend on Shizuku at runtime. The project is also actively shared in the [LINUX DO community](https://linux.do/).
 
 Third-party notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 

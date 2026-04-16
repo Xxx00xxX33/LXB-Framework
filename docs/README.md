@@ -5,7 +5,7 @@ Primary documentation entry points:
 - English: [`docs/en/README.md`](en/README.md)
 - 中文: [`docs/zh/README.md`](zh/README.md)
 
-## Current Scope (LXB-Framework)
+## Current Scope (AutoLXB / LXB-Framework runtime)
 
 This repository is now focused on:
 
