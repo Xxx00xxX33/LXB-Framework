@@ -107,7 +107,7 @@ Before starting, make sure:
 
 ## More Documentation
 
-- [Getting started](https://wuwei-crg.github.io/AutoLXB/en/getting-started/quickstart/)
+- [Getting started](https://wuwei-crg.github.io/AutoLXB/en/getting-started/install/)
 - [Task tutorial](https://wuwei-crg.github.io/AutoLXB/en/tasks/overview/)
 - [Configuration](https://wuwei-crg.github.io/AutoLXB/en/config/overview/)
 - [Trace logs](https://wuwei-crg.github.io/AutoLXB/en/trace/overview/)
