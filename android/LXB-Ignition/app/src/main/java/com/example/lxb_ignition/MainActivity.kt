@@ -360,6 +360,12 @@ private fun resolveWirelessGuideUiState(status: WirelessBootstrapStatus): Wirele
             stepIndex = 4,
             accentColor = Color(0xFF616161)
         )
+        "STOP_PAIRING_REQUIRED" -> WirelessGuideUiState(
+            headline = "Pair and connect first",
+            detail = detail,
+            stepIndex = 3,
+            accentColor = AppWarning
+        )
         else -> WirelessGuideUiState(
             headline = "Not started yet",
             detail = detail,
@@ -383,6 +389,41 @@ fun ControlTab(
     val rootAvailable by viewModel.rootAvailable.collectAsState()
     val rootDetail by viewModel.rootDetail.collectAsState()
     var page by rememberSaveable { mutableIntStateOf(0) }
+    var showStopPairingDialog by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(wireless.state) {
+        if (wireless.state == "STOP_PAIRING_REQUIRED") {
+            page = 1
+            showStopPairingDialog = true
+        }
+    }
+
+    if (showStopPairingDialog) {
+        AlertDialog(
+            onDismissRequest = { showStopPairingDialog = false },
+            title = { Text(tr("Pair and connect first")) },
+            text = {
+                Text(
+                    tr("AutoLXB needs Wireless ADB pairing before it can stop this core process. Open Developer Options, enable Wireless debugging, tap \"Pair device with pairing code\", then submit the code from the notification.")
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showStopPairingDialog = false
+                        onOpenWirelessDebuggingSettings()
+                    }
+                ) {
+                    Text(tr("Open Developer Options"))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStopPairingDialog = false }) {
+                    Text(tr("OK"))
+                }
+            }
+        )
+    }
 
     when (page) {
         0 -> ControlOverviewPage(
@@ -1868,6 +1909,8 @@ private val ZhMap = mapOf(
     "Waiting for pairing code" to "等待输入配对码",
     "Pairing phone" to "正在配对手机",
     "Phone paired successfully" to "手机已配对成功",
+    "Pair and connect first" to "请先配对并连接",
+    "AutoLXB needs Wireless ADB pairing before it can stop this core process. Open Developer Options, enable Wireless debugging, tap \"Pair device with pairing code\", then submit the code from the notification." to "AutoLXB 需要先完成无线 ADB 配对，才能停止当前 Core 进程。请打开开发者选项，启用无线调试，点击“使用配对码配对设备”，然后在通知栏提交配对码。",
     "Connecting phone" to "正在连接手机",
     "Starting core service" to "正在启动核心服务",
     "Recovering core connection" to "正在恢复核心连接",

@@ -131,6 +131,7 @@ class WirelessAdbBootstrapService : Service() {
     private var currentMessage = "Idle"
     private var watchdogJob: Job? = null
     private var startRetryJob: Job? = null
+    private var pendingStopAfterPairing = false
 
     override fun onCreate() {
         super.onCreate()
@@ -175,6 +176,7 @@ class WirelessAdbBootstrapService : Service() {
     }
 
     private fun startBootstrap() {
+        pendingStopAfterPairing = false
         if (!running) {
             running = true
             val notification = buildNotification()
@@ -208,6 +210,7 @@ class WirelessAdbBootstrapService : Service() {
     }
 
     private fun startCoreNative() {
+        pendingStopAfterPairing = false
         ensureForegroundRunning()
         startRetryJob?.cancel()
         setState("STARTING_CORE", "Starting core via saved wireless endpoint...")
@@ -229,6 +232,7 @@ class WirelessAdbBootstrapService : Service() {
     }
 
     private fun startCoreRootDirect() {
+        pendingStopAfterPairing = false
         ensureForegroundRunning()
         startRetryJob?.cancel()
         setState("STARTING_CORE_ROOT", "Starting core via root...")
@@ -296,11 +300,7 @@ class WirelessAdbBootstrapService : Service() {
             if (stopped || !isCoreReachableLocal()) {
                 stopBootstrap()
             } else {
-                running = false
-                watchdogJob?.cancel()
-                setState("IDLE", "Unified stop failed: ${details.joinToString("; ")}")
-                runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
-                stopSelf()
+                startPairingFlowForStop(details.joinToString("; "))
             }
         }
     }
@@ -323,6 +323,7 @@ class WirelessAdbBootstrapService : Service() {
     }
 
     private fun stopBootstrap() {
+        pendingStopAfterPairing = false
         stopDiscovery()
         watchdogJob?.cancel()
         startRetryJob?.cancel()
@@ -330,6 +331,20 @@ class WirelessAdbBootstrapService : Service() {
         setState("IDLE", "Bootstrap stopped.")
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun startPairingFlowForStop(detail: String) {
+        pendingStopAfterPairing = true
+        ensureForegroundRunning()
+        startRetryJob?.cancel()
+        watchdogJob?.cancel()
+        startDiscovery()
+        setState(
+            "STOP_PAIRING_REQUIRED",
+            "Please pair and connect first, then AutoLXB can stop the running core. $detail"
+        )
+        updateNotification()
+        openWirelessDebuggingSettings()
     }
 
     private fun scheduleStartRetry() {
@@ -437,6 +452,23 @@ class WirelessAdbBootstrapService : Service() {
                 val persisted = connectReady ?: connect ?: Endpoint(pairing.host, 5555)
                 persistWirelessEndpoint(persisted)
 
+                if (pendingStopAfterPairing) {
+                    setState("CONNECTING", "Pairing succeeded. Connecting to stop the running core...")
+                    updateNotification()
+                    val endpointStop = stopCoreViaSavedEndpoint()
+                    if (endpointStop || !isCoreReachableLocal()) {
+                        pendingStopAfterPairing = false
+                        stopBootstrap()
+                    } else {
+                        setState(
+                            "STOP_PAIRING_REQUIRED",
+                            "Pairing succeeded, but stopping core still failed. Keep Wireless debugging on and tap Stop Core again."
+                        )
+                        updateNotification()
+                    }
+                    return@launch
+                }
+
                 setState(
                     "PAIRED",
                     "Pairing succeeded. Return to the app and tap \"I already paired before, start directly\"."
@@ -542,8 +574,9 @@ class WirelessAdbBootstrapService : Service() {
                 val port = serviceInfo.port
                 if (host.isNotBlank() && port in 1..65535) {
                     latestPairingEndpoint = Endpoint(host, port)
-                    if (currentState == "WAIT_INPUT") {
-                        setState("WAIT_INPUT", "Detected pairing endpoint: ${latestPairingEndpoint?.asText().orEmpty()}")
+                    if (currentState == "WAIT_INPUT" || currentState == "STOP_PAIRING_REQUIRED") {
+                        val nextState = if (currentState == "STOP_PAIRING_REQUIRED") "STOP_PAIRING_REQUIRED" else "WAIT_INPUT"
+                        setState(nextState, "Detected pairing endpoint: ${latestPairingEndpoint?.asText().orEmpty()}")
                         updateNotification()
                     }
                 }
@@ -559,8 +592,9 @@ class WirelessAdbBootstrapService : Service() {
                 val port = serviceInfo.port
                 if (host.isNotBlank() && port in 1..65535) {
                     latestConnectEndpoint = Endpoint(host, port)
-                    if (currentState == "WAIT_INPUT") {
-                        setState("WAIT_INPUT", "Detected connect endpoint: ${latestConnectEndpoint?.asText().orEmpty()}")
+                    if (currentState == "WAIT_INPUT" || currentState == "STOP_PAIRING_REQUIRED") {
+                        val nextState = if (currentState == "STOP_PAIRING_REQUIRED") "STOP_PAIRING_REQUIRED" else "WAIT_INPUT"
+                        setState(nextState, "Detected connect endpoint: ${latestConnectEndpoint?.asText().orEmpty()}")
                         updateNotification()
                     }
                 }
@@ -1468,6 +1502,7 @@ class WirelessAdbBootstrapService : Service() {
             "STARTING_CORE" -> nt("Starting core service", "正在启动核心服务", uiLang)
             "RECONNECTING" -> nt("Recovering connection", "正在恢复连接", uiLang)
             "STOPPING" -> nt("Stopping core service", "正在停止核心服务", uiLang)
+            "STOP_PAIRING_REQUIRED" -> nt("Pairing required to stop core", "停止核心需要先配对", uiLang)
             else -> nt("Wireless startup guide", "无线启动引导", uiLang)
         }
     }
@@ -1523,6 +1558,11 @@ class WirelessAdbBootstrapService : Service() {
             "STOPPING" -> nt(
                 "Stopping the core process.",
                 "正在停止核心进程。",
+                uiLang
+            )
+            "STOP_PAIRING_REQUIRED" -> nt(
+                "Please pair and connect first. Open \"Pair device with pairing code\", then enter the code here.",
+                "请先配对并连接。请打开“使用配对码配对设备”，然后在这里输入配对码。",
                 uiLang
             )
             else -> nt(
